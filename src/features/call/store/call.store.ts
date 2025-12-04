@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/store/call.store.ts
-// Call Store - Global call state (WITH WEBRTC)
+// FIXED: Added operation locks to prevent race conditions
 // ================================================
 
 import { create } from 'zustand';
@@ -28,6 +28,12 @@ interface CallState {
   isVideoEnabled: boolean;
   isConnected: boolean;
   connectionState: string;
+
+  // ✅ ADD: Operation locks
+  isAnswering: boolean;
+  isRejecting: boolean;
+  isEnding: boolean;
+  isInitiating: boolean;
 
   // Actions - Call
   initiateCall: (data: InitiateCallInput) => Promise<CallWithDetails>;
@@ -71,16 +77,39 @@ export const useCallStore = create<CallState>()(
       isConnected: false,
       connectionState: 'new',
 
+      // ✅ ADD: Operation locks initial state
+      isAnswering: false,
+      isRejecting: false,
+      isEnding: false,
+      isInitiating: false,
+
       // Initiate call
       initiateCall: async (data) => {
-        set({ isLoading: true, error: null });
+        // ✅ CHECK: Prevent duplicate initiate
+        if (get().isInitiating) {
+          logger.warn('Call Store: Initiate already in progress');
+          throw new Error('Call initiation already in progress');
+        }
+
+        // ✅ CHECK: Prevent if already in call
+        if (get().activeCall) {
+          logger.warn('Call Store: Already in a call');
+          throw new Error('Already in a call');
+        }
+
+        set({ isInitiating: true, isLoading: true, error: null });
+
         try {
           logger.debug('Call Store: Initiating call...');
           const call = await callService.initiateCall(data);
 
           toastHelper.success('Calling...');
 
-          set({ activeCall: call, isLoading: false });
+          set({
+            activeCall: call,
+            isLoading: false,
+            isInitiating: false,
+          });
 
           logger.success('Call Store: Call initiated');
           return call;
@@ -92,7 +121,8 @@ export const useCallStore = create<CallState>()(
 
           set({
             error: errorMsg,
-            isLoading: false
+            isLoading: false,
+            isInitiating: false,
           });
           throw error;
         }
@@ -100,7 +130,14 @@ export const useCallStore = create<CallState>()(
 
       // Answer call
       answerCall: async (callId) => {
-        set({ isLoading: true, error: null });
+        // ✅ CHECK: Prevent duplicate answer
+        if (get().isAnswering) {
+          logger.warn('Call Store: Answer already in progress');
+          return;
+        }
+
+        set({ isAnswering: true, isLoading: true, error: null });
+
         try {
           logger.debug('Call Store: Answering call:', callId);
           const call = await callService.answerCall(callId);
@@ -110,7 +147,8 @@ export const useCallStore = create<CallState>()(
           set({
             activeCall: call,
             incomingCall: null,
-            isLoading: false
+            isLoading: false,
+            isAnswering: false,
           });
 
           logger.success('Call Store: Call answered');
@@ -122,7 +160,8 @@ export const useCallStore = create<CallState>()(
 
           set({
             error: errorMsg,
-            isLoading: false
+            isLoading: false,
+            isAnswering: false,
           });
           throw error;
         }
@@ -130,13 +169,24 @@ export const useCallStore = create<CallState>()(
 
       // Reject call
       rejectCall: async (callId) => {
+        // ✅ CHECK: Prevent duplicate reject
+        if (get().isRejecting) {
+          logger.warn('Call Store: Reject already in progress');
+          return;
+        }
+
+        set({ isRejecting: true });
+
         try {
           logger.debug('Call Store: Rejecting call:', callId);
           await callService.rejectCall(callId);
 
           toastHelper.success('Call rejected');
 
-          set({ incomingCall: null });
+          set({
+            incomingCall: null,
+            isRejecting: false,
+          });
 
           logger.success('Call Store: Call rejected');
         } catch (error: any) {
@@ -145,13 +195,24 @@ export const useCallStore = create<CallState>()(
           logger.error('Call Store: Reject call failed:', error);
           toastHelper.error(errorMsg);
 
-          set({ error: errorMsg });
+          set({
+            error: errorMsg,
+            isRejecting: false,
+          });
           throw error;
         }
       },
 
       // End call
       endCall: async (callId, duration) => {
+        // ✅ CHECK: Prevent duplicate end
+        if (get().isEnding) {
+          logger.warn('Call Store: End already in progress');
+          return;
+        }
+
+        set({ isEnding: true });
+
         try {
           logger.debug('Call Store: Ending call:', callId);
 
@@ -167,6 +228,7 @@ export const useCallStore = create<CallState>()(
             incomingCall: null,
             isConnected: false,
             connectionState: 'closed',
+            isEnding: false,
           });
 
           logger.success('Call Store: Call ended');
@@ -181,7 +243,8 @@ export const useCallStore = create<CallState>()(
           set({
             activeCall: null,
             incomingCall: null,
-            error: errorMsg
+            error: errorMsg,
+            isEnding: false,
           });
           throw error;
         }
@@ -189,6 +252,12 @@ export const useCallStore = create<CallState>()(
 
       // Set incoming call
       setIncomingCall: (call) => {
+        // ✅ CHECK: Don't set if already in a call
+        if (call && get().activeCall) {
+          logger.warn('Call Store: Cannot set incoming call - already in a call');
+          return;
+        }
+
         logger.debug('Call Store: Setting incoming call:', call?.id);
         set({ incomingCall: call });
       },
@@ -216,7 +285,7 @@ export const useCallStore = create<CallState>()(
 
           set({
             error: errorMsg,
-            isLoading: false
+            isLoading: false,
           });
         }
       },
@@ -274,7 +343,7 @@ export const useCallStore = create<CallState>()(
         const { localStream, isMuted } = get();
         if (localStream) {
           localStream.getAudioTracks().forEach((track) => {
-            track.enabled = isMuted; // Toggle: if muted, enable; if not muted, disable
+            track.enabled = isMuted;
           });
 
           logger.debug('Call Store: Toggled mute:', !isMuted);
@@ -300,14 +369,14 @@ export const useCallStore = create<CallState>()(
         const { localStream, remoteStream } = get();
 
         if (localStream) {
-          localStream.getTracks().forEach(track => {
+          localStream.getTracks().forEach((track) => {
             track.stop();
             logger.debug('Call Store: Stopped local track:', track.kind);
           });
         }
 
         if (remoteStream) {
-          remoteStream.getTracks().forEach(track => {
+          remoteStream.getTracks().forEach((track) => {
             track.stop();
             logger.debug('Call Store: Stopped remote track:', track.kind);
           });
@@ -348,6 +417,10 @@ export const useCallStore = create<CallState>()(
           isVideoEnabled: true,
           isConnected: false,
           connectionState: 'new',
+          isAnswering: false,
+          isRejecting: false,
+          isEnding: false,
+          isInitiating: false,
         });
       },
     }),

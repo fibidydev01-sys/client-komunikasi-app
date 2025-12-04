@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/components/active-call-modal.tsx
-// ActiveCallModal - FULL SCREEN MODAL (no navigation needed!)
+// FIXED: Better button state management and cleanup
 // ================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -39,15 +39,16 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     isConnected,
     connectionState,
     cleanupStreams,
+    isEnding, // ✅ USE: Store's isEnding state
   } = useCallStore();
 
   const [callDuration, setCallDuration] = useState(0);
-  const [isEnding, setIsEnding] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
+  const webrtcCleanupRef = useRef<(() => void) | null>(null);
 
   // Determine call details
   const isCaller = activeCall?.callerId === user?.id;
@@ -61,6 +62,11 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     isCaller,
     isVideoCall: isVideoCall || false,
   });
+
+  // Store cleanup reference
+  useEffect(() => {
+    webrtcCleanupRef.current = cleanup;
+  }, [cleanup]);
 
   // Initialize WebRTC when modal opens
   useEffect(() => {
@@ -136,45 +142,58 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
   };
 
   // Handle end call
-  // Ganti bagian handleEndCall di active-call-modal.tsx
-
   const handleEndCall = useCallback(async () => {
-    if (!activeCall || isEnding) return;
-
-    setIsEnding(true);
+    if (!activeCall || isEnding) {
+      logger.warn('Active Call Modal: Cannot end call - no active call or already ending');
+      return;
+    }
 
     try {
       logger.debug('Active Call Modal: Ending call...');
 
-      // ✅ CLEANUP DULU
-      cleanup();
+      // Cleanup WebRTC first
+      if (webrtcCleanupRef.current) {
+        webrtcCleanupRef.current();
+      }
       cleanupStreams();
 
-      // ✅ HITUNG DURATION
+      // Calculate duration
       const duration = callStartTimeRef.current
         ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
         : 0;
 
-      // ✅ END CALL DI SERVER
+      // End call on server
       await endCall(activeCall.id, duration);
 
-      // ✅ CLOSE MODAL (onClose sudah jadi no-op, jadi aman)
-      logger.success('Active Call Modal: Call ended successfully');
+      // Reset local state
+      callStartTimeRef.current = null;
+      setCallDuration(0);
 
+      logger.success('Active Call Modal: Call ended successfully');
     } catch (error) {
       logger.error('Active Call Modal: Failed to end call:', error);
-      setIsEnding(false);
     }
-  }, [activeCall, isEnding, cleanup, cleanupStreams, endCall]);
+  }, [activeCall, isEnding, cleanupStreams, endCall]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount or when call ends externally
   useEffect(() => {
     return () => {
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current);
       }
+      callStartTimeRef.current = null;
     };
   }, []);
+
+  // ✅ Handle when activeCall becomes null (call ended externally)
+  useEffect(() => {
+    if (open && !activeCall) {
+      logger.debug('Active Call Modal: Call ended externally, cleaning up');
+      if (webrtcCleanupRef.current) {
+        webrtcCleanupRef.current();
+      }
+    }
+  }, [open, activeCall]);
 
   if (!open || !activeCall) return null;
 
@@ -286,6 +305,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             size="lg"
             variant={isMuted ? 'destructive' : 'secondary'}
             onClick={toggleMute}
+            disabled={isEnding}
             className="h-16 w-16 rounded-full"
           >
             {isMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
@@ -297,6 +317,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
               size="lg"
               variant={!isVideoEnabled ? 'destructive' : 'secondary'}
               onClick={toggleVideo}
+              disabled={isEnding}
               className="h-16 w-16 rounded-full"
             >
               {isVideoEnabled ? <Video className="h-7 w-7" /> : <VideoOff className="h-7 w-7" />}
@@ -311,7 +332,11 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             disabled={isEnding}
             className="h-16 w-16 rounded-full bg-red-600 hover:bg-red-700"
           >
-            {isEnding ? <Loader2 className="h-7 w-7 animate-spin" /> : <PhoneOff className="h-7 w-7" />}
+            {isEnding ? (
+              <Loader2 className="h-7 w-7 animate-spin" />
+            ) : (
+              <PhoneOff className="h-7 w-7" />
+            )}
           </Button>
         </div>
 
@@ -322,7 +347,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'
               }`} />
             <span className="text-sm">
-              {isConnected ? 'Connected' : 'Connecting...'}
+              {isEnding ? 'Ending...' : isConnected ? 'Connected' : 'Connecting...'}
             </span>
           </div>
         </div>

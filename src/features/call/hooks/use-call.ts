@@ -1,16 +1,17 @@
-// src/features/call/hooks/use-call.ts
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+// ================================================
+// FILE: src/features/call/hooks/use-call.ts
+// FIXED: Added state locking to prevent race conditions
+// ================================================
+
+import { useEffect, useRef, useCallback } from 'react';
 import { useCallStore } from '../store/call.store';
 import { useCallSocket } from './use-call-socket';
-import { ROUTE_PATHS } from '@/shared/constants/route-paths';
 import { logger } from '@/shared/utils/logger';
 import type { InitiateCallInput } from '../types/call.types';
 
 let GLOBAL_CALL_HISTORY_FETCHED = false;
 
 export const useCall = () => {
-  const navigate = useNavigate();
   const {
     activeCall,
     incomingCall,
@@ -37,6 +38,12 @@ export const useCall = () => {
 
   useCallSocket();
 
+  // ✅ ADD: Refs to prevent duplicate operations
+  const isAnsweringRef = useRef(false);
+  const isRejectingRef = useRef(false);
+  const isEndingRef = useRef(false);
+  const isInitiatingRef = useRef(false);
+
   useEffect(() => {
     if (!GLOBAL_CALL_HISTORY_FETCHED) {
       logger.debug('useCall: Fetching call history (first time only)');
@@ -45,28 +52,48 @@ export const useCall = () => {
     }
   }, [fetchCallHistory]);
 
-  // ✅ FIX: JANGAN navigate langsung! Biarkan modal yang handle
-  const handleInitiateCall = async (data: InitiateCallInput) => {
+  // ✅ FIXED: Prevent duplicate initiate calls
+  const handleInitiateCall = useCallback(async (data: InitiateCallInput) => {
+    // Prevent duplicate calls
+    if (isInitiatingRef.current) {
+      logger.warn('useCall: Initiate already in progress, ignoring...');
+      return null;
+    }
+
+    // Prevent if already in a call
+    if (activeCall) {
+      logger.warn('useCall: Already in a call, ignoring...');
+      return null;
+    }
+
+    isInitiatingRef.current = true;
+
     try {
       logger.debug('useCall: Initiating call...');
-
-      // Create call in database
       const call = await initiateCall(data);
-
       logger.success('useCall: Call created, activeCall will trigger modal');
-
-      // ❌ HAPUS NAVIGATE! Modal akan muncul otomatis via activeCall state
-      // navigate(ROUTE_PATHS.ACTIVE_CALL);
-
       return call;
     } catch (error) {
       logger.error('useCall: Failed to initiate call:', error);
       throw error;
+    } finally {
+      // Reset after a small delay to prevent rapid re-clicks
+      setTimeout(() => {
+        isInitiatingRef.current = false;
+      }, 1000);
     }
-  };
+  }, [activeCall, initiateCall]);
 
-  // ✅ FIX: Answer call TANPA navigate
-  const handleAnswerCall = async (callId: string) => {
+  // ✅ FIXED: Prevent duplicate answer calls
+  const handleAnswerCall = useCallback(async (callId: string) => {
+    // Prevent duplicate answers
+    if (isAnsweringRef.current) {
+      logger.warn('useCall: Answer already in progress, ignoring...');
+      return;
+    }
+
+    isAnsweringRef.current = true;
+
     try {
       logger.debug('useCall: Answering call:', callId);
 
@@ -78,17 +105,28 @@ export const useCall = () => {
         (window as any).__incomingCallAudio = null;
       }
 
-      // Answer call - modal akan muncul otomatis
       await answerCall(callId);
-
       logger.success('useCall: Call answered, modal will show automatically');
     } catch (error) {
       logger.error('useCall: Failed to answer call:', error);
       throw error;
+    } finally {
+      // Reset after a delay
+      setTimeout(() => {
+        isAnsweringRef.current = false;
+      }, 2000);
     }
-  };
+  }, [answerCall]);
 
-  const handleRejectCall = async (callId: string) => {
+  // ✅ FIXED: Prevent duplicate reject calls
+  const handleRejectCall = useCallback(async (callId: string) => {
+    if (isRejectingRef.current) {
+      logger.warn('useCall: Reject already in progress, ignoring...');
+      return;
+    }
+
+    isRejectingRef.current = true;
+
     try {
       logger.debug('useCall: Rejecting call:', callId);
 
@@ -104,26 +142,37 @@ export const useCall = () => {
     } catch (error) {
       logger.error('useCall: Failed to reject call:', error);
       throw error;
+    } finally {
+      setTimeout(() => {
+        isRejectingRef.current = false;
+      }, 1000);
     }
-  };
+  }, [rejectCall]);
 
-  // ✅ FIX: End call TANPA navigate (modal akan close sendiri)
-  const handleEndCall = async (callId: string, duration?: number) => {
+  // ✅ FIXED: Prevent duplicate end calls
+  const handleEndCall = useCallback(async (callId: string, duration?: number) => {
+    if (isEndingRef.current) {
+      logger.warn('useCall: End already in progress, ignoring...');
+      return;
+    }
+
+    isEndingRef.current = true;
+
     try {
       logger.debug('useCall: Ending call:', callId);
       await endCall(callId, duration);
-
-      // ❌ HAPUS NAVIGATE! Modal akan close otomatis
-      // navigate(ROUTE_PATHS.CALLS);
-
       logger.success('useCall: Call ended');
     } catch (error) {
       logger.error('useCall: Failed to end call:', error);
       throw error;
+    } finally {
+      setTimeout(() => {
+        isEndingRef.current = false;
+      }, 1000);
     }
-  };
+  }, [endCall]);
 
-  const handleDeleteCallLog = async (callId: string) => {
+  const handleDeleteCallLog = useCallback(async (callId: string) => {
     try {
       logger.debug('useCall: Deleting call log:', callId);
       await deleteCallLog(callId);
@@ -132,7 +181,7 @@ export const useCall = () => {
       logger.error('useCall: Failed to delete call log:', error);
       throw error;
     }
-  };
+  }, [deleteCallLog]);
 
   return {
     activeCall,

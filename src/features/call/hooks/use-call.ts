@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/hooks/use-call.ts
-// useCall Hook - Navigate to Active Call Page
+// useCall Hook - FIXED: Navigate AFTER WebRTC setup
 // ================================================
 
 import { useEffect } from 'react';
@@ -52,16 +52,25 @@ export const useCall = () => {
     }
   }, [fetchCallHistory]);
 
-  // Handle initiate call
+  // ✅ FIX: Navigate AFTER WebRTC offer is sent
   const handleInitiateCall = async (data: InitiateCallInput) => {
     try {
       logger.debug('useCall: Initiating call...');
+
+      // Create call in database
       const call = await initiateCall(data);
 
-      // Navigate to active call page
+      logger.success('useCall: Call created in DB:', call.id);
+
+      // ✅ FIX: Wait for WebRTC negotiation to start BEFORE navigating
+      // Give time for offer/ice to be sent (500ms should be enough)
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // NOW navigate to active call page
       navigate(ROUTE_PATHS.ACTIVE_CALL);
 
-      logger.success('useCall: Call initiated, navigating to active call');
+      logger.success('useCall: Navigated to active call page');
+
       return call;
     } catch (error) {
       logger.error('useCall: Failed to initiate call:', error);

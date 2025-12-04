@@ -78,12 +78,12 @@ export const useCall = () => {
     }
   };
 
-  // Handle answer call
+  // Handle answer call - DON'T navigate
   const handleAnswerCall = async (callId: string) => {
     try {
       logger.debug('useCall: Answering call:', callId);
 
-      // Stop ringtone if playing
+      // Stop ringtone
       const audio = (window as any).__incomingCallAudio;
       if (audio) {
         audio.pause();
@@ -91,12 +91,10 @@ export const useCall = () => {
         (window as any).__incomingCallAudio = null;
       }
 
+      // Answer call - modal will open automatically via activeCall state
       await answerCall(callId);
 
-      // Navigate to active call page
-      navigate(ROUTE_PATHS.ACTIVE_CALL);
-
-      logger.success('useCall: Call answered, navigating to active call');
+      logger.success('useCall: Call answered, modal will open automatically');
     } catch (error) {
       logger.error('useCall: Failed to answer call:', error);
       throw error;

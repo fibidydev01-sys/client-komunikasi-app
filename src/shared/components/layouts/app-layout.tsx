@@ -8,6 +8,7 @@ import { useMediaQuery } from '@/shared/hooks/use-media-query';
 import { DesktopSidebar } from './desktop-sidebar';
 import { MobileBottomNav } from './mobile-bottom-nav';
 import { IncomingCallModal } from '@/features/call/components/incoming-call-modal';
+import { ActiveCallModal } from '@/features/call/components/active-call-modal';
 import { useCall } from '@/features/call/hooks/use-call';
 import { cn } from '@/shared/utils/cn';
 
@@ -22,6 +23,7 @@ export const AppLayout = ({ children, className }: AppLayoutProps) => {
   // ✅ ADD: Global incoming call handler
   const {
     incomingCall,
+    activeCall,
     answerCall,
     rejectCall,
   } = useCall();
@@ -68,6 +70,12 @@ export const AppLayout = ({ children, className }: AppLayoutProps) => {
         call={incomingCall}
         onAnswer={handleAnswerCall}
         onReject={handleRejectCall}
+      />
+
+      {/* ✅ GLOBAL ACTIVE CALL MODAL */}
+      <ActiveCallModal
+        open={!!activeCall}
+        onClose={() => { }} // Will be handled by end call
       />
     </>
   );

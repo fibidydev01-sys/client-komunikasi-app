@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/hooks/use-webrtc.ts
-// FIXED: Added proper cleanup, call state validation, and abort handling
+// FIXED V2: Caller waits for call to be ANSWERED before sending offer
 // ================================================
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -14,6 +14,8 @@ const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -29,6 +31,7 @@ interface WebRTCSignalData {
   callId: string;
   signal: RTCSessionDescriptionInit | RTCIceCandidateInit;
   to: string;
+  from?: string;
 }
 
 export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWebRTCProps) => {
@@ -37,29 +40,22 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     setRemoteStream,
     setIsConnected,
     setConnectionState,
-    activeCall, // ✅ ADD: Get activeCall to check if call is still valid
+    activeCall,
   } = useCallStore();
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
-  const offerTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ✅ ADD: Track offer timeout
-  const isCleanedUpRef = useRef(false); // ✅ ADD: Track cleanup state
+  const isCleanedUpRef = useRef(false);
+  const hasCreatedOfferRef = useRef(false);
 
   const [isInitialized, setIsInitialized] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
-  // ✅ ADD: Check if call is still valid
-  const isCallValid = useCallback(() => {
-    const valid = activeCall?.id === callId && activeCall?.status !== 'ENDED';
-    if (!valid) {
-      logger.warn('WebRTC: Call is no longer valid, callId:', callId);
-    }
-    return valid;
-  }, [activeCall, callId]);
+  // ✅ Check if call is answered
+  const isCallAnswered = activeCall?.status === 'ANSWERED';
 
   const getUserMedia = useCallback(async () => {
-    // ✅ CHECK: Don't proceed if cleaned up
     if (isCleanedUpRef.current) {
       throw new Error('WebRTC already cleaned up');
     }
@@ -82,7 +78,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      // ✅ CHECK: Don't set if cleaned up during await
       if (isCleanedUpRef.current) {
         stream.getTracks().forEach(track => track.stop());
         throw new Error('WebRTC cleaned up during media acquisition');
@@ -119,11 +114,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     peerConnectionRef.current = pc;
 
     pc.onicecandidate = (event) => {
-      // ✅ CHECK: Don't send if cleaned up or call invalid
-      if (isCleanedUpRef.current || !isCallValid()) {
-        logger.warn('WebRTC: Ignoring ICE candidate - call ended');
-        return;
-      }
+      if (isCleanedUpRef.current) return;
 
       if (event.candidate) {
         logger.debug('WebRTC: 📤 Sending ICE candidate to:', otherUserId);
@@ -144,14 +135,14 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       if (state === 'connected' || state === 'completed') {
         setIsConnected(true);
-        logger.success('WebRTC: ✅ Connected!');
+        logger.success('WebRTC: ✅ ICE Connected!');
       } else if (state === 'disconnected') {
         setIsConnected(false);
-        logger.warn('WebRTC: ⚠️ Disconnected');
+        logger.warn('WebRTC: ⚠️ ICE Disconnected');
       } else if (state === 'failed') {
         setIsConnected(false);
-        logger.error('WebRTC: ❌ Connection failed');
-        toastHelper.error('Connection failed');
+        logger.error('WebRTC: ❌ ICE Connection failed');
+        toastHelper.error('Connection failed - please try again');
       }
     };
 
@@ -175,7 +166,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     pc.ontrack = (event) => {
       if (isCleanedUpRef.current) return;
 
-      logger.success('WebRTC: 🎥 Remote track received');
+      logger.success('WebRTC: 🎥 Remote track received:', event.track.kind);
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
       }
@@ -183,12 +174,17 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
     logger.success('WebRTC: ✅ Peer connection created');
     return pc;
-  }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream, isCallValid]);
+  }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream]);
 
+  // ✅ Create and send offer
   const createAndSendOffer = useCallback(async () => {
-    // ✅ CHECK: Don't proceed if cleaned up or call invalid
-    if (isCleanedUpRef.current || !isCallValid()) {
-      logger.warn('WebRTC: Cannot send offer - call ended or cleaned up');
+    if (isCleanedUpRef.current) {
+      logger.warn('WebRTC: Cannot send offer - cleaned up');
+      return;
+    }
+
+    if (hasCreatedOfferRef.current) {
+      logger.warn('WebRTC: Offer already created, skipping...');
       return;
     }
 
@@ -199,6 +195,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     try {
+      hasCreatedOfferRef.current = true;
       logger.debug('WebRTC: 📤 Creating offer...');
 
       const offer = await pc.createOffer({
@@ -206,9 +203,8 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         offerToReceiveVideo: isVideoCall,
       });
 
-      // ✅ CHECK again after await
-      if (isCleanedUpRef.current || !isCallValid()) {
-        logger.warn('WebRTC: Call ended during offer creation');
+      if (isCleanedUpRef.current) {
+        logger.warn('WebRTC: Cleaned up during offer creation');
         return;
       }
 
@@ -222,40 +218,64 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         to: otherUserId,
       });
 
-      logger.success('WebRTC: ✅ Offer sent');
+      logger.success('WebRTC: ✅ Offer sent!');
     } catch (error) {
+      hasCreatedOfferRef.current = false;
       logger.error('WebRTC: ❌ Failed to create offer:', error);
-      if (!isCleanedUpRef.current) {
-        toastHelper.error('Failed to establish connection');
-      }
+      toastHelper.error('Failed to establish connection');
     }
-  }, [callId, otherUserId, isVideoCall, isCallValid]);
+  }, [callId, otherUserId, isVideoCall]);
 
+  // ✅ Handle incoming offer (for RECEIVER)
   const handleOffer = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('type' in data.signal) || data.signal.type !== 'offer') return;
-    if (isCleanedUpRef.current || !isCallValid()) return;
+    if (isCleanedUpRef.current) return;
 
-    const pc = peerConnectionRef.current;
+    logger.debug('WebRTC: 📥 Received offer from caller');
+
+    let pc = peerConnectionRef.current;
+
+    // If no peer connection, create one and add tracks
     if (!pc) {
-      logger.error('WebRTC: No peer connection for handling offer');
-      return;
+      logger.debug('WebRTC: Creating peer connection for incoming offer...');
+
+      if (!localStreamRef.current) {
+        try {
+          await getUserMedia();
+        } catch (error) {
+          logger.error('WebRTC: Failed to get media for answer:', error);
+          return;
+        }
+      }
+
+      pc = createPeerConnection();
+      if (!pc) {
+        logger.error('WebRTC: Failed to create peer connection');
+        return;
+      }
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          pc!.addTrack(track, localStreamRef.current!);
+          logger.debug('WebRTC: ➕ Added track to PC:', track.kind);
+        });
+      }
     }
 
     try {
-      logger.debug('WebRTC: 📥 Received offer, creating answer...');
-
+      logger.debug('WebRTC: Setting remote description (offer)...');
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Process pending candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
+        logger.debug('WebRTC: ✅ Added pending ICE candidate');
       }
       pendingCandidatesRef.current = [];
 
-      // ✅ CHECK after await
-      if (isCleanedUpRef.current || !isCallValid()) return;
+      if (isCleanedUpRef.current) return;
 
+      logger.debug('WebRTC: Creating answer...');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
@@ -267,12 +287,13 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         to: otherUserId,
       });
 
-      logger.success('WebRTC: ✅ Answer sent');
+      logger.success('WebRTC: ✅ Answer sent!');
     } catch (error) {
       logger.error('WebRTC: ❌ Failed to handle offer:', error);
     }
-  }, [callId, otherUserId, isCallValid]);
+  }, [callId, otherUserId, getUserMedia, createPeerConnection]);
 
+  // ✅ Handle incoming answer (for CALLER)
   const handleAnswer = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('type' in data.signal) || data.signal.type !== 'answer') return;
@@ -285,21 +306,23 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     try {
-      logger.debug('WebRTC: 📥 Received answer');
+      logger.debug('WebRTC: 📥 Received answer from receiver');
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
+        logger.debug('WebRTC: ✅ Added pending ICE candidate');
       }
       pendingCandidatesRef.current = [];
 
-      logger.success('WebRTC: ✅ Answer applied');
+      logger.success('WebRTC: ✅ Answer applied, connection should establish...');
     } catch (error) {
       logger.error('WebRTC: ❌ Failed to handle answer:', error);
     }
   }, [callId]);
 
+  // ✅ Handle ICE candidates
   const handleICE = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('candidate' in data.signal)) return;
@@ -322,6 +345,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId]);
 
+  // ✅ Initialize - different for caller vs receiver
   const initializeCall = useCallback(async () => {
     if (isInitialized) {
       logger.warn('WebRTC: Already initialized');
@@ -334,11 +358,11 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     try {
-      logger.debug('WebRTC: 🚀 Initializing call...', { isCaller, isVideoCall });
+      logger.debug('WebRTC: 🚀 Initializing...', { isCaller, isVideoCall });
 
       const stream = await getUserMedia();
-      const pc = createPeerConnection();
 
+      const pc = createPeerConnection();
       if (!pc) {
         throw new Error('Failed to create peer connection');
       }
@@ -350,42 +374,42 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       setIsInitialized(true);
 
-      // ✅ FIXED: Only caller sends offer, with cancellable timeout
+      // ✅ CALLER: Wait for answer, don't send offer yet
+      // ✅ RECEIVER: Wait for offer
       if (isCaller) {
-        logger.debug('WebRTC: Caller waiting 2 seconds before sending offer...');
-
-        // Clear any existing timeout
-        if (offerTimeoutRef.current) {
-          clearTimeout(offerTimeoutRef.current);
-        }
-
-        offerTimeoutRef.current = setTimeout(async () => {
-          // ✅ CHECK before sending offer
-          if (!isCleanedUpRef.current && isCallValid()) {
-            await createAndSendOffer();
-          } else {
-            logger.warn('WebRTC: Offer cancelled - call ended');
-          }
-        }, 2000);
+        logger.debug('WebRTC: 📞 Caller ready, waiting for receiver to answer...');
+      } else {
+        logger.debug('WebRTC: 📞 Receiver ready, waiting for offer...');
       }
 
-      logger.success('WebRTC: ✅ Call initialized');
+      logger.success('WebRTC: ✅ Initialization complete');
     } catch (error) {
-      logger.error('WebRTC: ❌ Failed to initialize call:', error);
+      logger.error('WebRTC: ❌ Failed to initialize:', error);
     }
-  }, [isInitialized, isCaller, isVideoCall, getUserMedia, createPeerConnection, createAndSendOffer, isCallValid]);
+  }, [isInitialized, isCaller, isVideoCall, getUserMedia, createPeerConnection]);
 
+  // ✅ CRITICAL: Caller sends offer ONLY when call is ANSWERED
+  useEffect(() => {
+    if (isCaller && isInitialized && isCallAnswered && !hasCreatedOfferRef.current && !isCleanedUpRef.current) {
+      logger.debug('WebRTC: 🎯 Call ANSWERED! Caller sending offer now...');
+
+      // Small delay to ensure receiver has time to initialize
+      const timeout = setTimeout(() => {
+        if (!isCleanedUpRef.current && !hasCreatedOfferRef.current) {
+          createAndSendOffer();
+        }
+      }, 1000); // 1 second delay
+
+      return () => clearTimeout(timeout);
+    }
+  }, [isCaller, isInitialized, isCallAnswered, createAndSendOffer]);
+
+  // Cleanup function
   const cleanup = useCallback(() => {
     logger.debug('WebRTC: 🧹 Cleaning up...');
 
-    // ✅ SET cleanup flag first to prevent any new operations
     isCleanedUpRef.current = true;
-
-    // ✅ Cancel pending offer timeout
-    if (offerTimeoutRef.current) {
-      clearTimeout(offerTimeoutRef.current);
-      offerTimeoutRef.current = null;
-    }
+    hasCreatedOfferRef.current = false;
 
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
@@ -403,14 +427,15 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     logger.debug('WebRTC: ✅ Cleanup complete');
   }, []);
 
-  // ✅ ADD: Reset cleanup flag when callId changes (new call)
+  // Reset when callId changes
   useEffect(() => {
     isCleanedUpRef.current = false;
+    hasCreatedOfferRef.current = false;
   }, [callId]);
 
   // Socket listeners
   useEffect(() => {
-    logger.debug('WebRTC: 👂 Setting up socket listeners...');
+    logger.debug('WebRTC: 👂 Setting up socket listeners for callId:', callId);
 
     socketClient.on(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
     socketClient.on(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
@@ -421,7 +446,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       socketClient.off(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
       socketClient.off(SOCKET_EVENTS.WEBRTC_ICE, handleICE);
     };
-  }, [handleOffer, handleAnswer, handleICE]);
+  }, [callId, handleOffer, handleAnswer, handleICE]);
 
   // Cleanup on unmount
   useEffect(() => {

@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/components/active-call-modal.tsx
-// FIXED: Better button state management and cleanup
+// FIXED V2: Both caller and receiver initialize WebRTC properly
 // ================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -39,23 +39,25 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     isConnected,
     connectionState,
     cleanupStreams,
-    isEnding, // ✅ USE: Store's isEnding state
+    isEnding,
   } = useCallStore();
 
   const [callDuration, setCallDuration] = useState(0);
+  const [isInitializing, setIsInitializing] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const webrtcCleanupRef = useRef<(() => void) | null>(null);
+  const hasInitializedRef = useRef(false);
 
   // Determine call details
   const isCaller = activeCall?.callerId === user?.id;
   const otherParticipant = isCaller ? activeCall?.receiver : activeCall?.caller;
   const isVideoCall = activeCall?.type === 'VIDEO';
 
-  // Initialize WebRTC
+  // Initialize WebRTC hook
   const { initializeCall, cleanup, isInitialized, mediaError } = useWebRTC({
     callId: activeCall?.id || '',
     otherUserId: otherParticipant?.id || '',
@@ -68,15 +70,32 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     webrtcCleanupRef.current = cleanup;
   }, [cleanup]);
 
-  // Initialize WebRTC when modal opens
+  // ✅ Initialize WebRTC when modal opens - BOTH caller and receiver
   useEffect(() => {
-    if (open && activeCall && !isInitialized) {
-      logger.debug('Active Call Modal: Initializing WebRTC...');
-      initializeCall();
-    }
-  }, [open, activeCall, isInitialized, initializeCall]);
+    if (open && activeCall && !hasInitializedRef.current && !isInitialized) {
+      hasInitializedRef.current = true;
+      setIsInitializing(true);
 
-  // Attach local stream
+      logger.debug('Active Call Modal: Initializing WebRTC...', {
+        isCaller,
+        callId: activeCall.id,
+        status: activeCall.status,
+      });
+
+      initializeCall().finally(() => {
+        setIsInitializing(false);
+      });
+    }
+  }, [open, activeCall, isInitialized, initializeCall, isCaller]);
+
+  // Reset hasInitialized when modal closes
+  useEffect(() => {
+    if (!open) {
+      hasInitializedRef.current = false;
+    }
+  }, [open]);
+
+  // Attach local stream to video element
   useEffect(() => {
     if (localStream && localVideoRef.current) {
       localVideoRef.current.srcObject = localStream;
@@ -84,7 +103,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [localStream]);
 
-  // Attach remote stream
+  // Attach remote stream to video element
   useEffect(() => {
     if (remoteStream && remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStream;
@@ -92,7 +111,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [remoteStream]);
 
-  // Call duration timer
+  // Call duration timer - start when connected
   useEffect(() => {
     if (isConnected && !callStartTimeRef.current) {
       callStartTimeRef.current = Date.now();
@@ -121,37 +140,43 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Get connection status
+  // Get connection status text
   const getConnectionStatus = () => {
     if (isConnected) {
       return formatDuration(callDuration);
+    }
+
+    if (isInitializing) {
+      return '🔄 Initializing...';
     }
 
     switch (connectionState) {
       case 'connecting':
         return '📞 Connecting...';
       case 'new':
-        return '📞 Starting call...';
+        return isCaller
+          ? '📞 Waiting for answer...'
+          : '📞 Connecting...';
       case 'failed':
         return '❌ Connection failed';
       case 'disconnected':
         return '⚠️ Reconnecting...';
       default:
-        return '📞 Calling...';
+        return '📞 Setting up call...';
     }
   };
 
   // Handle end call
   const handleEndCall = useCallback(async () => {
     if (!activeCall || isEnding) {
-      logger.warn('Active Call Modal: Cannot end call - no active call or already ending');
+      logger.warn('Active Call Modal: Cannot end call');
       return;
     }
 
     try {
       logger.debug('Active Call Modal: Ending call...');
 
-      // Cleanup WebRTC first
+      // Cleanup WebRTC
       if (webrtcCleanupRef.current) {
         webrtcCleanupRef.current();
       }
@@ -168,14 +193,15 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       // Reset local state
       callStartTimeRef.current = null;
       setCallDuration(0);
+      hasInitializedRef.current = false;
 
-      logger.success('Active Call Modal: Call ended successfully');
+      logger.success('Active Call Modal: Call ended');
     } catch (error) {
       logger.error('Active Call Modal: Failed to end call:', error);
     }
   }, [activeCall, isEnding, cleanupStreams, endCall]);
 
-  // Cleanup on unmount or when call ends externally
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (callTimerRef.current) {
@@ -185,13 +211,14 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     };
   }, []);
 
-  // ✅ Handle when activeCall becomes null (call ended externally)
+  // Handle external call end
   useEffect(() => {
     if (open && !activeCall) {
-      logger.debug('Active Call Modal: Call ended externally, cleaning up');
+      logger.debug('Active Call Modal: Call ended externally');
       if (webrtcCleanupRef.current) {
         webrtcCleanupRef.current();
       }
+      hasInitializedRef.current = false;
     }
   }, [open, activeCall]);
 
@@ -221,7 +248,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       <div className="flex-1 relative">
         {isVideoCall ? (
           <>
-            {/* Remote Video */}
+            {/* Remote Video (fullscreen) */}
             <video
               ref={remoteVideoRef}
               autoPlay
@@ -246,7 +273,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
               )}
             </div>
 
-            {/* No remote fallback */}
+            {/* Placeholder when no remote video */}
             {!remoteStream && (
               <div className="absolute inset-0 flex items-center justify-center bg-gray-800">
                 <div className="text-center">
@@ -267,7 +294,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
           /* Voice Call UI */
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <div className={`relative ${isConnected ? 'animate-none' : 'animate-pulse'}`}>
+              <div className={`relative ${isConnected ? '' : 'animate-pulse'}`}>
                 <UserAvatar
                   src={otherParticipant?.avatar}
                   name={otherParticipant?.name || 'Unknown'}
@@ -305,7 +332,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             size="lg"
             variant={isMuted ? 'destructive' : 'secondary'}
             onClick={toggleMute}
-            disabled={isEnding}
+            disabled={isEnding || isInitializing}
             className="h-16 w-16 rounded-full"
           >
             {isMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
@@ -317,7 +344,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
               size="lg"
               variant={!isVideoEnabled ? 'destructive' : 'secondary'}
               onClick={toggleVideo}
-              disabled={isEnding}
+              disabled={isEnding || isInitializing}
               className="h-16 w-16 rounded-full"
             >
               {isVideoEnabled ? <Video className="h-7 w-7" /> : <VideoOff className="h-7 w-7" />}
@@ -342,12 +369,22 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
 
         {/* Connection indicator */}
         <div className="mt-4 flex justify-center">
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${isConnected
+            ? 'bg-green-500/20 text-green-400'
+            : 'bg-yellow-500/20 text-yellow-400'
             }`}>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'
+            <div className={`w-2 h-2 rounded-full ${isConnected
+              ? 'bg-green-500'
+              : 'bg-yellow-500 animate-pulse'
               }`} />
             <span className="text-sm">
-              {isEnding ? 'Ending...' : isConnected ? 'Connected' : 'Connecting...'}
+              {isEnding
+                ? 'Ending...'
+                : isInitializing
+                  ? 'Setting up...'
+                  : isConnected
+                    ? 'Connected'
+                    : 'Connecting...'}
             </span>
           </div>
         </div>

@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/store/call.store.ts
-// FIXED: Added operation locks to prevent race conditions
+// FIXED V2: Proper state management with operation locks
 // ================================================
 
 import { create } from 'zustand';
@@ -29,7 +29,7 @@ interface CallState {
   isConnected: boolean;
   connectionState: string;
 
-  // ✅ ADD: Operation locks
+  // Operation locks
   isAnswering: boolean;
   isRejecting: boolean;
   isEnding: boolean;
@@ -76,8 +76,6 @@ export const useCallStore = create<CallState>()(
       isVideoEnabled: true,
       isConnected: false,
       connectionState: 'new',
-
-      // ✅ ADD: Operation locks initial state
       isAnswering: false,
       isRejecting: false,
       isEnding: false,
@@ -85,14 +83,14 @@ export const useCallStore = create<CallState>()(
 
       // Initiate call
       initiateCall: async (data) => {
-        // ✅ CHECK: Prevent duplicate initiate
-        if (get().isInitiating) {
+        const state = get();
+
+        if (state.isInitiating) {
           logger.warn('Call Store: Initiate already in progress');
           throw new Error('Call initiation already in progress');
         }
 
-        // ✅ CHECK: Prevent if already in call
-        if (get().activeCall) {
+        if (state.activeCall) {
           logger.warn('Call Store: Already in a call');
           throw new Error('Already in a call');
         }
@@ -111,7 +109,7 @@ export const useCallStore = create<CallState>()(
             isInitiating: false,
           });
 
-          logger.success('Call Store: Call initiated');
+          logger.success('Call Store: Call initiated:', call.id);
           return call;
         } catch (error: any) {
           const errorMsg = error.response?.data?.message || 'Failed to initiate call';
@@ -130,8 +128,9 @@ export const useCallStore = create<CallState>()(
 
       // Answer call
       answerCall: async (callId) => {
-        // ✅ CHECK: Prevent duplicate answer
-        if (get().isAnswering) {
+        const state = get();
+
+        if (state.isAnswering) {
           logger.warn('Call Store: Answer already in progress');
           return;
         }
@@ -151,7 +150,7 @@ export const useCallStore = create<CallState>()(
             isAnswering: false,
           });
 
-          logger.success('Call Store: Call answered');
+          logger.success('Call Store: Call answered:', call.id);
         } catch (error: any) {
           const errorMsg = error.response?.data?.message || 'Failed to answer call';
 
@@ -169,8 +168,9 @@ export const useCallStore = create<CallState>()(
 
       // Reject call
       rejectCall: async (callId) => {
-        // ✅ CHECK: Prevent duplicate reject
-        if (get().isRejecting) {
+        const state = get();
+
+        if (state.isRejecting) {
           logger.warn('Call Store: Reject already in progress');
           return;
         }
@@ -205,8 +205,9 @@ export const useCallStore = create<CallState>()(
 
       // End call
       endCall: async (callId, duration) => {
-        // ✅ CHECK: Prevent duplicate end
-        if (get().isEnding) {
+        const state = get();
+
+        if (state.isEnding) {
           logger.warn('Call Store: End already in progress');
           return;
         }
@@ -214,7 +215,7 @@ export const useCallStore = create<CallState>()(
         set({ isEnding: true });
 
         try {
-          logger.debug('Call Store: Ending call:', callId);
+          logger.debug('Call Store: Ending call:', callId, 'duration:', duration);
 
           // Cleanup streams first
           get().cleanupStreams();
@@ -236,24 +237,25 @@ export const useCallStore = create<CallState>()(
           const errorMsg = error.response?.data?.message || 'Failed to end call';
 
           logger.error('Call Store: End call failed:', error);
-          toastHelper.error(errorMsg);
 
           // Still cleanup even on error
           get().cleanupStreams();
+
           set({
             activeCall: null,
             incomingCall: null,
             error: errorMsg,
             isEnding: false,
           });
-          throw error;
         }
       },
 
       // Set incoming call
       setIncomingCall: (call) => {
-        // ✅ CHECK: Don't set if already in a call
-        if (call && get().activeCall) {
+        const state = get();
+
+        // Don't set if already in a call
+        if (call && state.activeCall) {
           logger.warn('Call Store: Cannot set incoming call - already in a call');
           return;
         }
@@ -265,7 +267,17 @@ export const useCallStore = create<CallState>()(
       // Set active call
       setActiveCall: (call) => {
         logger.debug('Call Store: Setting active call:', call?.id);
-        set({ activeCall: call });
+
+        // If clearing active call, also reset connection state
+        if (!call) {
+          set({
+            activeCall: null,
+            isConnected: false,
+            connectionState: 'new',
+          });
+        } else {
+          set({ activeCall: call });
+        }
       },
 
       // Fetch call history
@@ -316,13 +328,13 @@ export const useCallStore = create<CallState>()(
 
       // Set local stream
       setLocalStream: (stream) => {
-        logger.debug('Call Store: Setting local stream');
+        logger.debug('Call Store: Setting local stream:', stream ? 'present' : 'null');
         set({ localStream: stream });
       },
 
       // Set remote stream
       setRemoteStream: (stream) => {
-        logger.debug('Call Store: Setting remote stream');
+        logger.debug('Call Store: Setting remote stream:', stream ? 'present' : 'null');
         set({ remoteStream: stream });
       },
 
@@ -343,7 +355,7 @@ export const useCallStore = create<CallState>()(
         const { localStream, isMuted } = get();
         if (localStream) {
           localStream.getAudioTracks().forEach((track) => {
-            track.enabled = isMuted;
+            track.enabled = isMuted; // If muted, enable. If not muted, disable.
           });
 
           logger.debug('Call Store: Toggled mute:', !isMuted);
@@ -367,6 +379,8 @@ export const useCallStore = create<CallState>()(
       // Cleanup streams
       cleanupStreams: () => {
         const { localStream, remoteStream } = get();
+
+        logger.debug('Call Store: Cleaning up streams...');
 
         if (localStream) {
           localStream.getTracks().forEach((track) => {

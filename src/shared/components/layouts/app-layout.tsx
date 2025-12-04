@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/shared/components/layouts/app-layout.tsx
-// AppLayout Component - WITH GLOBAL INCOMING CALL MODAL
+// AppLayout Component - WITH GLOBAL INCOMING CALL MODAL (FIXED)
 // ================================================
 
 import { ReactNode } from 'react';
@@ -10,7 +10,9 @@ import { MobileBottomNav } from './mobile-bottom-nav';
 import { IncomingCallModal } from '@/features/call/components/incoming-call-modal';
 import { ActiveCallModal } from '@/features/call/components/active-call-modal';
 import { useCall } from '@/features/call/hooks/use-call';
+import { useCallStore } from '@/features/call/store/call.store';
 import { cn } from '@/shared/utils/cn';
+import { logger } from '@/shared/utils/logger';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -20,7 +22,7 @@ interface AppLayoutProps {
 export const AppLayout = ({ children, className }: AppLayoutProps) => {
   const isDesktop = useMediaQuery('(min-width: 1024px)');
 
-  // ✅ ADD: Global incoming call handler
+  // ✅ Global incoming call handler
   const {
     incomingCall,
     activeCall,
@@ -28,22 +30,47 @@ export const AppLayout = ({ children, className }: AppLayoutProps) => {
     rejectCall,
   } = useCall();
 
+  // ✅ Handle answer call
   const handleAnswerCall = async () => {
-    if (!incomingCall) return;
+    if (!incomingCall) {
+      logger.warn('AppLayout: No incoming call to answer');
+      return;
+    }
+
     try {
+      logger.debug('AppLayout: Answering incoming call:', incomingCall.id);
       await answerCall(incomingCall.id);
+      logger.success('AppLayout: Call answered successfully');
     } catch (error) {
-      console.error('Failed to answer call:', error);
+      logger.error('AppLayout: Failed to answer call:', error);
     }
   };
 
+  // ✅ Handle reject call
   const handleRejectCall = async () => {
-    if (!incomingCall) return;
-    try {
-      await rejectCall(incomingCall.id);
-    } catch (error) {
-      console.error('Failed to reject call:', error);
+    if (!incomingCall) {
+      logger.warn('AppLayout: No incoming call to reject');
+      return;
     }
+
+    try {
+      logger.debug('AppLayout: Rejecting incoming call:', incomingCall.id);
+      await rejectCall(incomingCall.id);
+      logger.success('AppLayout: Call rejected successfully');
+    } catch (error) {
+      logger.error('AppLayout: Failed to reject call:', error);
+    }
+  };
+
+  // ✅ Handle close active call modal (reset state)
+  const handleCloseActiveCall = () => {
+    logger.debug('AppLayout: Closing active call modal');
+
+    // Reset activeCall di store untuk close modal
+    const { setActiveCall } = useCallStore.getState();
+    setActiveCall(null);
+
+    logger.success('AppLayout: Active call modal closed');
   };
 
   return (
@@ -53,11 +80,13 @@ export const AppLayout = ({ children, className }: AppLayoutProps) => {
         {isDesktop && <DesktopSidebar />}
 
         {/* Main Content */}
-        <main className={cn(
-          'flex-1 overflow-hidden',
-          !isDesktop && 'pb-16', // Add padding for mobile bottom nav
-          className
-        )}>
+        <main
+          className={cn(
+            'flex-1 overflow-hidden',
+            !isDesktop && 'pb-16', // Add padding for mobile bottom nav
+            className
+          )}
+        >
           {children}
         </main>
 
@@ -72,10 +101,10 @@ export const AppLayout = ({ children, className }: AppLayoutProps) => {
         onReject={handleRejectCall}
       />
 
-      {/* ✅ GLOBAL ACTIVE CALL MODAL */}
+      {/* ✅ GLOBAL ACTIVE CALL MODAL (WITH PROPER CLOSE HANDLER) */}
       <ActiveCallModal
         open={!!activeCall}
-        onClose={() => { }} // Will be handled by end call
+        onClose={handleCloseActiveCall} // ← FIXED: Proper close handler
       />
     </>
   );

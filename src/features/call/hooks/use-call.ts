@@ -1,8 +1,4 @@
-// ================================================
-// FILE: src/features/call/hooks/use-call.ts
-// useCall Hook - FIXED: Navigate AFTER WebRTC setup
-// ================================================
-
+// src/features/call/hooks/use-call.ts
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCallStore } from '../store/call.store';
@@ -11,7 +7,6 @@ import { ROUTE_PATHS } from '@/shared/constants/route-paths';
 import { logger } from '@/shared/utils/logger';
 import type { InitiateCallInput } from '../types/call.types';
 
-// Global flag to prevent multiple fetches
 let GLOBAL_CALL_HISTORY_FETCHED = false;
 
 export const useCall = () => {
@@ -40,10 +35,8 @@ export const useCall = () => {
     clearError,
   } = useCallStore();
 
-  // Initialize socket listeners
   useCallSocket();
 
-  // Fetch call history only once
   useEffect(() => {
     if (!GLOBAL_CALL_HISTORY_FETCHED) {
       logger.debug('useCall: Fetching call history (first time only)');
@@ -52,7 +45,7 @@ export const useCall = () => {
     }
   }, [fetchCallHistory]);
 
-  // ✅ FIX: Navigate AFTER WebRTC offer is sent
+  // ✅ FIX: JANGAN navigate langsung! Biarkan modal yang handle
   const handleInitiateCall = async (data: InitiateCallInput) => {
     try {
       logger.debug('useCall: Initiating call...');
@@ -60,16 +53,10 @@ export const useCall = () => {
       // Create call in database
       const call = await initiateCall(data);
 
-      logger.success('useCall: Call created in DB:', call.id);
+      logger.success('useCall: Call created, activeCall will trigger modal');
 
-      // ✅ FIX: Wait for WebRTC negotiation to start BEFORE navigating
-      // Give time for offer/ice to be sent (500ms should be enough)
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // NOW navigate to active call page
-      navigate(ROUTE_PATHS.ACTIVE_CALL);
-
-      logger.success('useCall: Navigated to active call page');
+      // ❌ HAPUS NAVIGATE! Modal akan muncul otomatis via activeCall state
+      // navigate(ROUTE_PATHS.ACTIVE_CALL);
 
       return call;
     } catch (error) {
@@ -78,7 +65,7 @@ export const useCall = () => {
     }
   };
 
-  // Handle answer call - DON'T navigate
+  // ✅ FIX: Answer call TANPA navigate
   const handleAnswerCall = async (callId: string) => {
     try {
       logger.debug('useCall: Answering call:', callId);
@@ -91,22 +78,20 @@ export const useCall = () => {
         (window as any).__incomingCallAudio = null;
       }
 
-      // Answer call - modal will open automatically via activeCall state
+      // Answer call - modal akan muncul otomatis
       await answerCall(callId);
 
-      logger.success('useCall: Call answered, modal will open automatically');
+      logger.success('useCall: Call answered, modal will show automatically');
     } catch (error) {
       logger.error('useCall: Failed to answer call:', error);
       throw error;
     }
   };
 
-  // Handle reject call
   const handleRejectCall = async (callId: string) => {
     try {
       logger.debug('useCall: Rejecting call:', callId);
 
-      // Stop ringtone if playing
       const audio = (window as any).__incomingCallAudio;
       if (audio) {
         audio.pause();
@@ -122,20 +107,22 @@ export const useCall = () => {
     }
   };
 
-  // Handle end call
+  // ✅ FIX: End call TANPA navigate (modal akan close sendiri)
   const handleEndCall = async (callId: string, duration?: number) => {
     try {
       logger.debug('useCall: Ending call:', callId);
       await endCall(callId, duration);
-      navigate(ROUTE_PATHS.CALLS);
-      logger.success('useCall: Call ended, navigating to calls page');
+
+      // ❌ HAPUS NAVIGATE! Modal akan close otomatis
+      // navigate(ROUTE_PATHS.CALLS);
+
+      logger.success('useCall: Call ended');
     } catch (error) {
       logger.error('useCall: Failed to end call:', error);
       throw error;
     }
   };
 
-  // Handle delete call log
   const handleDeleteCallLog = async (callId: string) => {
     try {
       logger.debug('useCall: Deleting call log:', callId);
@@ -171,7 +158,6 @@ export const useCall = () => {
   };
 };
 
-// Reset function for logout
 export const resetCallFetch = () => {
   GLOBAL_CALL_HISTORY_FETCHED = false;
   logger.debug('useCall: Reset fetch flag');

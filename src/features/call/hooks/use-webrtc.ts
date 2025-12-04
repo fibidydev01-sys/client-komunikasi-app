@@ -1,8 +1,4 @@
-// ================================================
-// FILE: src/features/call/hooks/use-webrtc.ts
-// useWebRTC Hook - FIXED SOCKET EMIT WITH receiverId
-// ================================================
-
+// src/features/call/hooks/use-webrtc.ts
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { socketClient } from '@/lib/socket-client';
 import { useCallStore } from '../store/call.store';
@@ -10,7 +6,6 @@ import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 import { logger } from '@/shared/utils/logger';
 
-// ICE Servers configuration
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -21,7 +16,7 @@ const ICE_SERVERS: RTCConfiguration = {
 
 interface UseWebRTCProps {
   callId: string;
-  otherUserId: string; // ✅ IMPORTANT: receiverId
+  otherUserId: string;
   isCaller: boolean;
   isVideoCall: boolean;
 }
@@ -29,7 +24,7 @@ interface UseWebRTCProps {
 interface WebRTCSignalData {
   callId: string;
   signal: RTCSessionDescriptionInit | RTCIceCandidateInit;
-  to: string; // ✅ receiverId
+  to: string;
 }
 
 export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWebRTCProps) => {
@@ -43,17 +38,13 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
-  const isNegotiatingRef = useRef(false);
 
   const [isInitialized, setIsInitialized] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
-  // ============================================
-  // GET USER MEDIA
-  // ============================================
   const getUserMedia = useCallback(async () => {
     try {
-      logger.debug('WebRTC: 🎤 Requesting user media...', { video: isVideoCall });
+      logger.debug('WebRTC: 🎤 Requesting user media...');
 
       const constraints: MediaStreamConstraints = {
         audio: {
@@ -84,9 +75,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [isVideoCall, setLocalStream]);
 
-  // ============================================
-  // CREATE PEER CONNECTION
-  // ============================================
   const createPeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
       logger.warn('WebRTC: Peer connection already exists');
@@ -98,7 +86,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
 
-    // ✅ FIX: ICE Candidate - ALWAYS include 'to' (receiverId)
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         logger.debug('WebRTC: 📤 Sending ICE candidate to:', otherUserId);
@@ -106,12 +93,11 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         socketClient.emit(SOCKET_EVENTS.WEBRTC_ICE, {
           callId,
           signal: event.candidate.toJSON(),
-          to: otherUserId, // ✅ CRITICAL: Send to specific user
+          to: otherUserId,
         });
       }
     };
 
-    // ICE Connection state
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
       logger.debug('WebRTC: ICE state:', state);
@@ -129,7 +115,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       }
     };
 
-    // Connection state
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       logger.debug('WebRTC: Connection state:', state);
@@ -144,7 +129,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       }
     };
 
-    // Remote track received
     pc.ontrack = (event) => {
       logger.success('WebRTC: 🎥 Remote track received');
       if (event.streams && event.streams[0]) {
@@ -156,9 +140,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     return pc;
   }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream]);
 
-  // ============================================
-  // CREATE AND SEND OFFER (Caller)
-  // ============================================
+  // ✅ FIX: Delay offer untuk caller (tunggu receiver siap)
   const createAndSendOffer = useCallback(async () => {
     const pc = peerConnectionRef.current;
     if (!pc) {
@@ -176,13 +158,12 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setLocalDescription(offer);
 
-      // ✅ FIX: Include 'to' (receiverId)
       logger.debug('WebRTC: 📤 Sending offer to:', otherUserId);
 
       socketClient.emit(SOCKET_EVENTS.WEBRTC_OFFER, {
         callId,
         signal: offer,
-        to: otherUserId, // ✅ CRITICAL
+        to: otherUserId,
       });
 
       logger.success('WebRTC: ✅ Offer sent');
@@ -192,9 +173,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId, otherUserId, isVideoCall]);
 
-  // ============================================
-  // HANDLE INCOMING OFFER (Receiver)
-  // ============================================
   const handleOffer = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('type' in data.signal) || data.signal.type !== 'offer') return;
@@ -210,7 +188,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
       }
@@ -219,13 +196,12 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      // ✅ FIX: Include 'to' (receiverId)
       logger.debug('WebRTC: 📤 Sending answer to:', otherUserId);
 
       socketClient.emit(SOCKET_EVENTS.WEBRTC_ANSWER, {
         callId,
         signal: answer,
-        to: otherUserId, // ✅ CRITICAL
+        to: otherUserId,
       });
 
       logger.success('WebRTC: ✅ Answer sent');
@@ -234,9 +210,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId, otherUserId]);
 
-  // ============================================
-  // HANDLE INCOMING ANSWER (Caller)
-  // ============================================
   const handleAnswer = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('type' in data.signal) || data.signal.type !== 'answer') return;
@@ -252,7 +225,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
       }
@@ -264,9 +236,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId]);
 
-  // ============================================
-  // HANDLE ICE CANDIDATE
-  // ============================================
   const handleICE = useCallback(async (data: WebRTCSignalData) => {
     if (data.callId !== callId) return;
     if (!('candidate' in data.signal)) return;
@@ -288,9 +257,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId]);
 
-  // ============================================
-  // INITIALIZE CALL
-  // ============================================
+  // ✅ FIX: Tambah delay untuk caller SEBELUM kirim offer
   const initializeCall = useCallback(async () => {
     if (isInitialized) {
       logger.warn('WebRTC: Already initialized');
@@ -310,10 +277,12 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       setIsInitialized(true);
 
+      // ✅ FIX: Tambah delay LEBIH LAMA untuk caller
       if (isCaller) {
+        logger.debug('WebRTC: Caller waiting 2 seconds before sending offer...');
         setTimeout(async () => {
           await createAndSendOffer();
-        }, 500);
+        }, 2000); // ✅ NAIKIN JADI 2 DETIK!
       }
 
       logger.success('WebRTC: ✅ Call initialized');
@@ -322,9 +291,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [isInitialized, isCaller, isVideoCall, getUserMedia, createPeerConnection, createAndSendOffer]);
 
-  // ============================================
-  // CLEANUP
-  // ============================================
   const cleanup = useCallback(() => {
     logger.debug('WebRTC: 🧹 Cleaning up...');
 
@@ -339,15 +305,11 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     pendingCandidatesRef.current = [];
-    isNegotiatingRef.current = false;
     setIsInitialized(false);
 
     logger.debug('WebRTC: ✅ Cleanup complete');
   }, []);
 
-  // ============================================
-  // SOCKET EVENT LISTENERS
-  // ============================================
   useEffect(() => {
     logger.debug('WebRTC: 👂 Setting up socket listeners...');
 
@@ -362,9 +324,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     };
   }, [handleOffer, handleAnswer, handleICE]);
 
-  // ============================================
-  // CLEANUP ON UNMOUNT
-  // ============================================
   useEffect(() => {
     return () => {
       cleanup();

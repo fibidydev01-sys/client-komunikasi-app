@@ -136,6 +136,8 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
   };
 
   // Handle end call
+  // Ganti bagian handleEndCall di active-call-modal.tsx
+
   const handleEndCall = useCallback(async () => {
     if (!activeCall || isEnding) return;
 
@@ -144,21 +146,26 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     try {
       logger.debug('Active Call Modal: Ending call...');
 
+      // ✅ CLEANUP DULU
       cleanup();
       cleanupStreams();
 
+      // ✅ HITUNG DURATION
       const duration = callStartTimeRef.current
         ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
         : 0;
 
+      // ✅ END CALL DI SERVER
       await endCall(activeCall.id, duration);
 
-      onClose(); // Close modal instead of navigate
+      // ✅ CLOSE MODAL (onClose sudah jadi no-op, jadi aman)
+      logger.success('Active Call Modal: Call ended successfully');
+
     } catch (error) {
       logger.error('Active Call Modal: Failed to end call:', error);
       setIsEnding(false);
     }
-  }, [activeCall, isEnding, cleanup, cleanupStreams, endCall, onClose]);
+  }, [activeCall, isEnding, cleanup, cleanupStreams, endCall]);
 
   // Cleanup on unmount
   useEffect(() => {

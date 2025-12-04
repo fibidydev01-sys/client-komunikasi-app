@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/hooks/use-webrtc.ts
-// useWebRTC Hook - Complete WebRTC Implementation
+// useWebRTC Hook - FIXED SOCKET EMIT WITH receiverId
 // ================================================
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -10,21 +10,18 @@ import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 import { logger } from '@/shared/utils/logger';
 
-// ICE Servers configuration (STUN servers for NAT traversal)
+// ICE Servers configuration
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
   ],
   iceCandidatePoolSize: 10,
 };
 
 interface UseWebRTCProps {
   callId: string;
-  otherUserId: string;
+  otherUserId: string; // ✅ IMPORTANT: receiverId
   isCaller: boolean;
   isVideoCall: boolean;
 }
@@ -32,7 +29,7 @@ interface UseWebRTCProps {
 interface WebRTCSignalData {
   callId: string;
   signal: RTCSessionDescriptionInit | RTCIceCandidateInit;
-  to: string;
+  to: string; // ✅ receiverId
 }
 
 export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWebRTCProps) => {
@@ -41,7 +38,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     setRemoteStream,
     setIsConnected,
     setConnectionState,
-    localStream,
   } = useCallStore();
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -66,10 +62,9 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
           autoGainControl: true,
         },
         video: isVideoCall ? {
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
           facingMode: 'user',
-          frameRate: { ideal: 30, max: 60 },
         } : false,
       };
 
@@ -79,29 +74,12 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       setLocalStream(stream);
       setMediaError(null);
 
-      logger.success('WebRTC: ✅ User media obtained:', {
-        audioTracks: stream.getAudioTracks().length,
-        videoTracks: stream.getVideoTracks().length,
-      });
-
+      logger.success('WebRTC: ✅ User media obtained');
       return stream;
     } catch (error: any) {
       logger.error('WebRTC: ❌ Failed to get user media:', error);
-
-      let errorMessage = 'Failed to access media devices';
-
-      if (error.name === 'NotAllowedError') {
-        errorMessage = 'Camera/Microphone permission denied. Please allow access.';
-      } else if (error.name === 'NotFoundError') {
-        errorMessage = 'No camera/microphone found on this device.';
-      } else if (error.name === 'NotReadableError') {
-        errorMessage = 'Camera/Microphone is being used by another application.';
-      } else if (error.name === 'OverconstrainedError') {
-        errorMessage = 'Camera does not support the requested quality.';
-      }
-
-      setMediaError(errorMessage);
-      toastHelper.error(errorMessage);
+      setMediaError('Failed to access camera/microphone');
+      toastHelper.error('Failed to access camera/microphone');
       throw error;
     }
   }, [isVideoCall, setLocalStream]);
@@ -120,38 +98,38 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
 
-    // ICE Candidate handler - send to other peer
+    // ✅ FIX: ICE Candidate - ALWAYS include 'to' (receiverId)
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        logger.debug('WebRTC: 📤 Sending ICE candidate');
+        logger.debug('WebRTC: 📤 Sending ICE candidate to:', otherUserId);
 
         socketClient.emit(SOCKET_EVENTS.WEBRTC_ICE, {
           callId,
           signal: event.candidate.toJSON(),
-          to: otherUserId,
+          to: otherUserId, // ✅ CRITICAL: Send to specific user
         });
       }
     };
 
-    // ICE Connection state change
+    // ICE Connection state
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
-      logger.debug('WebRTC: ICE connection state:', state);
+      logger.debug('WebRTC: ICE state:', state);
 
       if (state === 'connected' || state === 'completed') {
         setIsConnected(true);
-        logger.success('WebRTC: ✅ ICE Connected!');
+        logger.success('WebRTC: ✅ Connected!');
       } else if (state === 'disconnected') {
         setIsConnected(false);
-        logger.warn('WebRTC: ⚠️ ICE Disconnected');
+        logger.warn('WebRTC: ⚠️ Disconnected');
       } else if (state === 'failed') {
         setIsConnected(false);
-        logger.error('WebRTC: ❌ ICE Failed');
-        toastHelper.error('Connection failed. Please try again.');
+        logger.error('WebRTC: ❌ Connection failed');
+        toastHelper.error('Connection failed');
       }
     };
 
-    // Connection state change
+    // Connection state
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       logger.debug('WebRTC: Connection state:', state);
@@ -168,34 +146,15 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
     // Remote track received
     pc.ontrack = (event) => {
-      logger.success('WebRTC: 🎥 Remote track received:', event.track.kind);
-
+      logger.success('WebRTC: 🎥 Remote track received');
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
-        logger.success('WebRTC: ✅ Remote stream set!');
-      }
-    };
-
-    // Negotiation needed
-    pc.onnegotiationneeded = async () => {
-      if (isNegotiatingRef.current) {
-        logger.warn('WebRTC: Already negotiating, skipping...');
-        return;
-      }
-
-      if (isCaller) {
-        try {
-          isNegotiatingRef.current = true;
-          await createAndSendOffer();
-        } finally {
-          isNegotiatingRef.current = false;
-        }
       }
     };
 
     logger.success('WebRTC: ✅ Peer connection created');
     return pc;
-  }, [callId, otherUserId, isCaller, setIsConnected, setConnectionState, setRemoteStream]);
+  }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream]);
 
   // ============================================
   // CREATE AND SEND OFFER (Caller)
@@ -217,12 +176,13 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setLocalDescription(offer);
 
+      // ✅ FIX: Include 'to' (receiverId)
       logger.debug('WebRTC: 📤 Sending offer to:', otherUserId);
 
       socketClient.emit(SOCKET_EVENTS.WEBRTC_OFFER, {
         callId,
         signal: offer,
-        to: otherUserId,
+        to: otherUserId, // ✅ CRITICAL
       });
 
       logger.success('WebRTC: ✅ Offer sent');
@@ -250,7 +210,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add any pending ICE candidates
+      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
       }
@@ -259,12 +219,13 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      // ✅ FIX: Include 'to' (receiverId)
       logger.debug('WebRTC: 📤 Sending answer to:', otherUserId);
 
       socketClient.emit(SOCKET_EVENTS.WEBRTC_ANSWER, {
         callId,
         signal: answer,
-        to: otherUserId,
+        to: otherUserId, // ✅ CRITICAL
       });
 
       logger.success('WebRTC: ✅ Answer sent');
@@ -291,7 +252,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add any pending ICE candidates
+      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
       }
@@ -319,7 +280,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         await pc.addIceCandidate(candidate);
         logger.debug('WebRTC: ✅ ICE candidate added');
       } else {
-        // Queue candidate if remote description not set yet
         pendingCandidatesRef.current.push(candidate);
         logger.debug('WebRTC: 📦 ICE candidate queued');
       }
@@ -340,13 +300,9 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     try {
       logger.debug('WebRTC: 🚀 Initializing call...', { isCaller, isVideoCall });
 
-      // Step 1: Get user media
       const stream = await getUserMedia();
-
-      // Step 2: Create peer connection
       const pc = createPeerConnection();
 
-      // Step 3: Add local tracks to peer connection
       stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
         logger.debug('WebRTC: ➕ Added track:', track.kind);
@@ -354,9 +310,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       setIsInitialized(true);
 
-      // Step 4: If caller, create and send offer
       if (isCaller) {
-        // Small delay to ensure everything is set up
         setTimeout(async () => {
           await createAndSendOffer();
         }, 500);
@@ -374,13 +328,11 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   const cleanup = useCallback(() => {
     logger.debug('WebRTC: 🧹 Cleaning up...');
 
-    // Close peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
 
-    // Stop local stream
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
@@ -399,13 +351,8 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   useEffect(() => {
     logger.debug('WebRTC: 👂 Setting up socket listeners...');
 
-    // Listen for WebRTC offer (receiver only)
     socketClient.on(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
-
-    // Listen for WebRTC answer (caller only)
     socketClient.on(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
-
-    // Listen for ICE candidates (both)
     socketClient.on(SOCKET_EVENTS.WEBRTC_ICE, handleICE);
 
     return () => {

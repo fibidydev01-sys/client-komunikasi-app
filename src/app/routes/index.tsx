@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/app/routes/index.tsx
-// Main Application Router (WITH ACTIVE CALL ROUTE)
+// Main Application Router (WITHOUT ACTIVE CALL ROUTE - USING MODAL INSTEAD)
 // ================================================
 
 import { createBrowserRouter, Navigate } from 'react-router-dom';
@@ -18,9 +18,6 @@ import {
   StatusPage,
   ProfilePage,
 } from '@/pages';
-
-// ✅ ADD: Import Active Call Page
-import { ActiveCallPage } from '@/features/call/pages/active-call-page';
 
 export const router = createBrowserRouter([
   {
@@ -71,15 +68,15 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
-  // ✅ ADD: Active Call Route
-  {
-    path: ROUTE_PATHS.ACTIVE_CALL,
-    element: (
-      <ProtectedRoute>
-        <ActiveCallPage />
-      </ProtectedRoute>
-    ),
-  },
+  // ❌ REMOVED: Active Call Route (now using modal instead)
+  // {
+  //   path: ROUTE_PATHS.ACTIVE_CALL,
+  //   element: (
+  //     <ProtectedRoute>
+  //       <ActiveCallPage />
+  //     </ProtectedRoute>
+  //   ),
+  // },
   {
     path: ROUTE_PATHS.CONTACTS,
     element: (

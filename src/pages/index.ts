@@ -12,7 +12,6 @@ export { ChatPage } from '@/features/chat/pages/chat-page';
 
 // Call Pages
 export { CallsPage } from '@/features/call/pages/calls-page';
-export { ActiveCallPage } from '@/features/call/pages/active-call-page'; // ✅ ADD
 
 // Contact Pages
 export { ContactsPage } from '@/features/contacts/pages/contacts-page';

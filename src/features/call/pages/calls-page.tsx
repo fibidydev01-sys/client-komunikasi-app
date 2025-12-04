@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/pages/calls-page.tsx
-// CallsPage - WITH INCOMING CALL MODAL
+// CallsPage - WITHOUT INCOMING CALL MODAL (moved to AppLayout)
 // ================================================
 
 import { Phone } from 'lucide-react';
@@ -9,44 +9,12 @@ import { PageLayout } from '@/shared/components/common/page-layout';
 import { EmptyState } from '@/shared/components/common/empty-state';
 import { LoadingSpinner } from '@/shared/components/common/loading-spinner';
 import { CallHistoryItem } from '../components/call-history-item';
-import { IncomingCallModal } from '../components/incoming-call-modal';
 import { useCall } from '../hooks/use-call';
 import { useAuthStore } from '@/features/auth/store/auth.store';
-import { logger } from '@/shared/utils/logger';
 
 export const CallsPage = () => {
   const { user } = useAuthStore();
-  const {
-    callHistory,
-    incomingCall,
-    isLoading,
-    answerCall,
-    rejectCall,
-  } = useCall();
-
-  const handleAnswerCall = async () => {
-    if (!incomingCall) return;
-
-    try {
-      logger.debug('Calls Page: 📞 Answering incoming call:', incomingCall.id);
-      await answerCall(incomingCall.id);
-      logger.success('Calls Page: ✅ Call answered successfully');
-    } catch (error) {
-      logger.error('Calls Page: ❌ Failed to answer call:', error);
-    }
-  };
-
-  const handleRejectCall = async () => {
-    if (!incomingCall) return;
-
-    try {
-      logger.debug('Calls Page: ❌ Rejecting incoming call:', incomingCall.id);
-      await rejectCall(incomingCall.id);
-      logger.success('Calls Page: ✅ Call rejected successfully');
-    } catch (error) {
-      logger.error('Calls Page: ❌ Failed to reject call:', error);
-    }
-  };
+  const { callHistory, isLoading } = useCall();
 
   const header = (
     <div>
@@ -80,13 +48,6 @@ export const CallsPage = () => {
           </div>
         )}
       </PageLayout>
-
-      {/* Incoming Call Modal */}
-      <IncomingCallModal
-        call={incomingCall}
-        onAnswer={handleAnswerCall}
-        onReject={handleRejectCall}
-      />
     </AppLayout>
   );
 };

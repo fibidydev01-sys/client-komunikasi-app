@@ -9,22 +9,25 @@ import { useCallStore } from '../store/call.store';
 import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 
+// ✅ FRESH XIRSYS CREDENTIALS - Updated: December 10, 2025 (ss-turn1)
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    { urls: ['stun:ss-turn2.xirsys.com'] },
+    // 1. Xirsys STUN
+    { urls: ['stun:ss-turn1.xirsys.com'] },
+    // 2. Google STUN (backup)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
+    // 3. Xirsys TURN (FRESH!)
     {
-      username: 'sW0wJKS6XcZfp3ObOHqUV8_8aFsIzAewbVVcfXKV_YJ9BKBmwqd-37RxLRVNdz33AAAAAGk40wZmaWJpZHk=',
-      credential: '477a8f94-d56b-11f0-ac7a-0242ac140004',
+      username: 'mHEZ8YnQZzu7nN_OBfrPdX1MrEqveUNye0pcBwgJkbzcY2dOJ1mDIT6h5SvMmltYAAAAAGk42UNmaWJpZHk=',
+      credential: 'ff1f37a0-d56e-11f0-b463-0242ac140004',
       urls: [
-        'turn:ss-turn2.xirsys.com:80?transport=udp',
-        'turn:ss-turn2.xirsys.com:3478?transport=udp',
-        'turn:ss-turn2.xirsys.com:80?transport=tcp',
-        'turn:ss-turn2.xirsys.com:3478?transport=tcp',
-        'turns:ss-turn2.xirsys.com:443?transport=tcp',
-        'turns:ss-turn2.xirsys.com:5349?transport=tcp',
+        'turn:ss-turn1.xirsys.com:80?transport=udp',
+        'turn:ss-turn1.xirsys.com:3478?transport=udp',
+        'turn:ss-turn1.xirsys.com:80?transport=tcp',
+        'turn:ss-turn1.xirsys.com:3478?transport=tcp',
+        'turns:ss-turn1.xirsys.com:443?transport=tcp',
+        'turns:ss-turn1.xirsys.com:5349?transport=tcp',
       ]
     }
   ],

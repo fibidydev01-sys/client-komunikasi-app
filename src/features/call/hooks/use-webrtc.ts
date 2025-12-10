@@ -12,15 +12,14 @@ import { logger } from '@/shared/utils/logger';
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    // STUN servers (gratis, no signup)
+    // ===== STUN (Google - gratis) =====
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
 
-    // ✅ TURN servers (gratis, no signup)
-    // OpenRelay
+    // ===== TURN (OpenRelay - gratis no signup) =====
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -37,16 +36,21 @@ const ICE_SERVERS: RTCConfiguration = {
       credential: 'openrelayproject',
     },
 
-    // ✅ Twilio FREE TURN (public test servers)
+    // ===== TURN (Standard ports untuk nembus firewall) =====
     {
-      urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-      username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27f3d3',
-      credential: 'w1uxM55V9yVoqyVFjt+meu6P9H6R3ABkWbMW1j9a+2s=',
+      urls: 'turn:relay.metered.ca:80',
+      username: 'e13b6bfce0d43c4b0de3b547',
+      credential: 'xB/lR4k+4KoKOcB2',
     },
     {
-      urls: 'turn:global.turn.twilio.com:443?transport=tcp',
-      username: 'f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27f3d3',
-      credential: 'w1uxM55V9yVoqyVFjt+meu6P9H6R3ABkWbMW1j9a+2s=',
+      urls: 'turn:relay.metered.ca:443',
+      username: 'e13b6bfce0d43c4b0de3b547',
+      credential: 'xB/lR4k+4KoKOcB2',
+    },
+    {
+      urls: 'turn:relay.metered.ca:443?transport=tcp',
+      username: 'e13b6bfce0d43c4b0de3b547',
+      credential: 'xB/lR4k+4KoKOcB2',
     },
   ],
   iceCandidatePoolSize: 10,

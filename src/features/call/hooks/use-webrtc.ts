@@ -13,39 +13,39 @@ import { toastHelper } from '@/shared/utils/toast-helper';
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     // STUN
-    { urls: 'stun:ss-turn2.xirsys.com' },
+    { urls: 'stun:ss-turn1.xirsys.com' },
     { urls: 'stun:stun.l.google.com:19302' },
 
-    // XIRSYS TURN
+    // ✅ XIRSYS TURN - CREDENTIALS BARU!
     {
-      urls: 'turn:ss-turn2.xirsys.com:80?transport=udp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turn:ss-turn1.xirsys.com:80?transport=udp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
     {
-      urls: 'turn:ss-turn2.xirsys.com:3478?transport=udp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turn:ss-turn1.xirsys.com:3478?transport=udp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
     {
-      urls: 'turn:ss-turn2.xirsys.com:80?transport=tcp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turn:ss-turn1.xirsys.com:80?transport=tcp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
     {
-      urls: 'turn:ss-turn2.xirsys.com:3478?transport=tcp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turn:ss-turn1.xirsys.com:3478?transport=tcp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
     {
-      urls: 'turns:ss-turn2.xirsys.com:443?transport=tcp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turns:ss-turn1.xirsys.com:443?transport=tcp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
     {
-      urls: 'turns:ss-turn2.xirsys.com:5349?transport=tcp',
-      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
-      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+      urls: 'turns:ss-turn1.xirsys.com:5349?transport=tcp',
+      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
+      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
     },
   ],
   iceCandidatePoolSize: 10,

@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/hooks/use-webrtc.ts
-// FIXED: Prevent duplicate peer connection
+// FIXED: Fresh Xirsys Credentials + Hybrid STUN/TURN
 // ================================================
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -9,42 +9,32 @@ import { useCallStore } from '../store/call.store';
 import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 
-// ✅ XIRSYS TURN SERVERS
+// ✅ FRESH XIRSYS CREDENTIALS (Updated: December 10, 2025)
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
+    // 1. Xirsys STUN
     {
-      urls: 'turn:ss-turn1.xirsys.com:80?transport=udp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
+      urls: ['stun:ss-turn2.xirsys.com']
     },
+    // 2. Public STUN (Google)
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    // 3. Xirsys TURN (Fallback)
     {
-      urls: 'turn:ss-turn1.xirsys.com:3478?transport=udp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
-    },
-    {
-      urls: 'turn:ss-turn1.xirsys.com:80?transport=tcp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
-    },
-    {
-      urls: 'turn:ss-turn1.xirsys.com:3478?transport=tcp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
-    },
-    {
-      urls: 'turns:ss-turn1.xirsys.com:443?transport=tcp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
-    },
-    {
-      urls: 'turns:ss-turn1.xirsys.com:5349?transport=tcp',
-      username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
-      credential: '3b91477e-d569-11f0-afc7-0242ac140004',
-    },
+      username: 'sW0wJKS6XcZfp3ObOHqUV8_8aFsIzAewbVVcfXKV_YJ9BKBmwqd-37RxLRVNdz33AAAAAGk40wZmaWJpZHk=',
+      credential: '477a8f94-d56b-11f0-ac7a-0242ac140004',
+      urls: [
+        'turn:ss-turn2.xirsys.com:80?transport=udp',
+        'turn:ss-turn2.xirsys.com:3478?transport=udp',
+        'turn:ss-turn2.xirsys.com:80?transport=tcp',
+        'turn:ss-turn2.xirsys.com:3478?transport=tcp',
+        'turns:ss-turn2.xirsys.com:443?transport=tcp',
+        'turns:ss-turn2.xirsys.com:5349?transport=tcp',
+      ]
+    }
   ],
   iceCandidatePoolSize: 10,
-  iceTransportPolicy: 'relay', // Force TURN
 };
 
 interface UseWebRTCProps {
@@ -75,7 +65,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
   const isCleanedUpRef = useRef(false);
   const hasCreatedOfferRef = useRef(false);
-  const hasAddedTracksRef = useRef(false); // ✅ NEW: Track if tracks already added
+  const hasAddedTracksRef = useRef(false);
 
   const [isInitialized, setIsInitialized] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -125,7 +115,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   }, [isVideoCall, setLocalStream]);
 
   const createPeerConnection = useCallback(() => {
-    // ✅ CRITICAL: Return existing if already created
     if (peerConnectionRef.current) {
       console.log('♻️ WebRTC: Reusing existing peer connection');
       return peerConnectionRef.current;
@@ -137,16 +126,29 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     console.log('🔧 WebRTC: Creating NEW peer connection...');
-    console.log('🔧 WebRTC: ICE Servers:', JSON.stringify(ICE_SERVERS.iceServers?.map(s => typeof s === 'string' ? s : s.urls), null, 2));
+    console.log('🔧 WebRTC: ICE Servers:', JSON.stringify(ICE_SERVERS.iceServers?.map(s => {
+      if (typeof s === 'string') return s;
+      if ('username' in s) return { urls: s.urls, hasAuth: true };
+      return s.urls;
+    }), null, 2));
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
+
+    pc.onicegatheringstatechange = () => {
+      console.log('🔄 WebRTC: ICE gathering state:', pc.iceGatheringState);
+    };
 
     pc.onicecandidate = (event) => {
       if (isCleanedUpRef.current) return;
 
       if (event.candidate) {
-        console.log('🧊 WebRTC: Sending ICE candidate to:', otherUserId);
+        console.log('🧊 WebRTC: ICE Candidate:', {
+          type: event.candidate.type,
+          protocol: event.candidate.protocol,
+          address: event.candidate.address || 'hidden',
+          port: event.candidate.port,
+        });
 
         socketClient.emit(SOCKET_EVENTS.WEBRTC_ICE, {
           callId,
@@ -208,7 +210,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     return pc;
   }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream]);
 
-  // ✅ NEW: Add tracks to peer connection (with duplicate check)
   const addTracksToConnection = useCallback((pc: RTCPeerConnection, stream: MediaStream) => {
     if (hasAddedTracksRef.current) {
       console.log('⚠️ WebRTC: Tracks already added, skipping...');
@@ -280,7 +281,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
     console.log('📥 WebRTC: Received offer from caller');
 
-    // ✅ CRITICAL: Use existing peer connection or create new one
     let pc = peerConnectionRef.current;
 
     if (!pc) {
@@ -302,7 +302,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       }
     }
 
-    // ✅ Add tracks if not already added
     if (localStreamRef.current && !hasAddedTracksRef.current) {
       addTracksToConnection(pc, localStreamRef.current);
     }
@@ -311,7 +310,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       console.log('📥 WebRTC: Setting remote description (offer)...');
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
         console.log('✅ WebRTC: Added pending ICE candidate');
@@ -354,7 +352,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
-      // Add pending ICE candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
         console.log('✅ WebRTC: Added pending ICE candidate');
@@ -410,7 +407,6 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         throw new Error('Failed to create peer connection');
       }
 
-      // ✅ Add tracks to connection
       addTracksToConnection(pc, stream);
 
       setIsInitialized(true);
@@ -446,7 +442,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
     isCleanedUpRef.current = true;
     hasCreatedOfferRef.current = false;
-    hasAddedTracksRef.current = false; // ✅ Reset
+    hasAddedTracksRef.current = false;
 
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
@@ -467,7 +463,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   useEffect(() => {
     isCleanedUpRef.current = false;
     hasCreatedOfferRef.current = false;
-    hasAddedTracksRef.current = false; // ✅ Reset on callId change
+    hasAddedTracksRef.current = false;
   }, [callId]);
 
   useEffect(() => {

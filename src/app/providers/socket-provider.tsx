@@ -4,14 +4,14 @@
 // ================================================
 
 import { useEffect, useRef, ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+// ❌ HAPUS: import { useNavigate } from 'react-router-dom';
 import { socketClient } from '@/lib/socket-client';
 import { useAuthStore } from '@/features/auth/store/auth.store';
 import { useChatStore } from '@/features/chat/store/chat.store';
 import { useCallStore } from '@/features/call/store/call.store';
 import { authService } from '@/features/auth/services/auth.service';
 import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
-import { ROUTE_PATHS } from '@/shared/constants/route-paths';
+// ❌ HAPUS: import { ROUTE_PATHS } from '@/shared/constants/route-paths';
 import { toastHelper } from '@/shared/utils/toast-helper';
 import { logger } from '@/shared/utils/logger';
 import type { MessageWithDetails } from '@/features/chat/types/chat.types';
@@ -22,7 +22,7 @@ interface SocketProviderProps {
 }
 
 export const SocketProvider = ({ children }: SocketProviderProps) => {
-  const navigate = useNavigate();
+  // ❌ HAPUS: const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
   const { addMessage, setTyping } = useChatStore();
   const {
@@ -136,20 +136,26 @@ export const SocketProvider = ({ children }: SocketProviderProps) => {
           setIncomingCall(null);
           setActiveCall(null);
           toastHelper.warning(`${data.call.receiver.name} declined the call`);
-          navigate(ROUTE_PATHS.CALLS);
+          // ❌ HAPUS: navigate(ROUTE_PATHS.CALLS);
+          // ✅ Navigation akan di-handle oleh component yang listen ke activeCall
         };
 
         const handleCallEnded = (data: { call: CallWithDetails }) => {
           logger.info('Socket: 📞 Call ENDED:', data.call.id);
 
-          // Only handle if this is our active call
-          if (activeCall?.id === data.call.id) {
-            cleanupStreams();
-            setActiveCall(null);
-            setIncomingCall(null);
-            toastHelper.info('Call ended');
-            navigate(ROUTE_PATHS.CALLS);
+          // Stop ringtone
+          if (ringtoneRef.current) {
+            ringtoneRef.current.pause();
+            ringtoneRef.current.currentTime = 0;
+            ringtoneRef.current = null;
           }
+
+          cleanupStreams();
+          setActiveCall(null);
+          setIncomingCall(null);
+          toastHelper.info('Call ended');
+          // ❌ HAPUS: navigate(ROUTE_PATHS.CALLS);
+          // ✅ Navigation akan di-handle oleh component yang listen ke activeCall
         };
 
         // ============================================
@@ -166,9 +172,6 @@ export const SocketProvider = ({ children }: SocketProviderProps) => {
         socketClient.on(SOCKET_EVENTS.CALL_ANSWERED, handleCallAnswered);
         socketClient.on(SOCKET_EVENTS.CALL_REJECTED, handleCallRejected);
         socketClient.on(SOCKET_EVENTS.CALL_ENDED, handleCallEnded);
-
-        // ⚠️ WEBRTC listeners TETAP di use-webrtc.ts karena butuh local state
-        // (offer, answer, ICE) harus dihandle per-component
 
         logger.success('Socket Provider: ✅ All listeners registered');
 
@@ -211,7 +214,7 @@ export const SocketProvider = ({ children }: SocketProviderProps) => {
     setActiveCall,
     cleanupStreams,
     activeCall,
-    navigate
+    // ❌ HAPUS: navigate dari dependencies
   ]);
 
   // Request notification permission on mount

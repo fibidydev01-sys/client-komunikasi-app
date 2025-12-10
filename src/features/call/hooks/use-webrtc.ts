@@ -12,11 +12,11 @@ import { toastHelper } from '@/shared/utils/toast-helper';
 // ✅ XIRSYS TURN SERVERS
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    // STUN
-    { urls: 'stun:ss-turn1.xirsys.com' },
-    { urls: 'stun:stun.l.google.com:19302' },
+    // ❌ HAPUS STUN - langsung TURN only
+    // { urls: 'stun:ss-turn1.xirsys.com' },
+    // { urls: 'stun:stun.l.google.com:19302' },
 
-    // ✅ XIRSYS TURN - CREDENTIALS BARU!
+    // ✅ TURN ONLY - FORCE RELAY
     {
       urls: 'turn:ss-turn1.xirsys.com:80?transport=udp',
       username: 'UQMNbgnssp2Y96Fa4Qx7IL6LQ1nPymFsba7oeZqmzpklsZ5-Rfqu8o28ZyM7UfiYAAAAAGk4z5dmaWJpZHk=',
@@ -49,6 +49,8 @@ const ICE_SERVERS: RTCConfiguration = {
     },
   ],
   iceCandidatePoolSize: 10,
+  // ✅ FORCE RELAY MODE!
+  iceTransportPolicy: 'relay',
 };
 
 interface UseWebRTCProps {

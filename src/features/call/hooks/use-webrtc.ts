@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/hooks/use-webrtc.ts
-// FIXED: Fresh Xirsys Credentials + Hybrid STUN/TURN
+// FIXED: Clean State Management + No Race Condition
 // ================================================
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -9,18 +9,12 @@ import { useCallStore } from '../store/call.store';
 import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 
-// ✅ FRESH XIRSYS CREDENTIALS (Updated: December 10, 2025)
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    // 1. Xirsys STUN
-    {
-      urls: ['stun:ss-turn2.xirsys.com']
-    },
-    // 2. Public STUN (Google)
+    { urls: ['stun:ss-turn2.xirsys.com'] },
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    // 3. Xirsys TURN (Fallback)
     {
       username: 'sW0wJKS6XcZfp3ObOHqUV8_8aFsIzAewbVVcfXKV_YJ9BKBmwqd-37RxLRVNdz33AAAAAGk40wZmaWJpZHk=',
       credential: '477a8f94-d56b-11f0-ac7a-0242ac140004',
@@ -63,7 +57,9 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
-  const isCleanedUpRef = useRef(false);
+
+  // ✅ Use callId-specific ref to prevent cross-call interference
+  const callSessionRef = useRef<string | null>(null);
   const hasCreatedOfferRef = useRef(false);
   const hasAddedTracksRef = useRef(false);
 
@@ -72,9 +68,61 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
   const isCallAnswered = activeCall?.status === 'ANSWERED';
 
+  // ✅ Helper: Check if current session is still valid
+  const isSessionValid = useCallback(() => {
+    return callSessionRef.current === callId && callId !== '';
+  }, [callId]);
+
+  // ✅ FULL CLEANUP - Nuclear option, bersih total
+  const cleanup = useCallback(() => {
+    console.log('🧹 WebRTC: Cleaning up for callId:', callSessionRef.current);
+
+    // 1. Invalidate session FIRST
+    callSessionRef.current = null;
+
+    // 2. Close peer connection
+    if (peerConnectionRef.current) {
+      // Remove all event handlers first
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.oniceconnectionstatechange = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onicegatheringstatechange = null;
+
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    // 3. Stop all media tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('🛑 WebRTC: Stopped track:', track.kind);
+      });
+      localStreamRef.current = null;
+    }
+
+    // 4. Clear all refs
+    pendingCandidatesRef.current = [];
+    hasCreatedOfferRef.current = false;
+    hasAddedTracksRef.current = false;
+
+    // 5. Reset all state
+    setIsInitialized(false);
+    setMediaError(null);
+
+    // 6. Clear store state
+    setLocalStream(null);
+    setRemoteStream(null);
+    setIsConnected(false);
+    setConnectionState('new');
+
+    console.log('✅ WebRTC: Cleanup complete - ready for new call');
+  }, [setLocalStream, setRemoteStream, setIsConnected, setConnectionState]);
+
   const getUserMedia = useCallback(async () => {
-    if (isCleanedUpRef.current) {
-      throw new Error('WebRTC already cleaned up');
+    if (!isSessionValid()) {
+      throw new Error('Invalid session - aborting getUserMedia');
     }
 
     try {
@@ -95,9 +143,10 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      if (isCleanedUpRef.current) {
+      // ✅ Double-check session still valid after async operation
+      if (!isSessionValid()) {
         stream.getTracks().forEach(track => track.stop());
-        throw new Error('WebRTC cleaned up during media acquisition');
+        throw new Error('Session invalidated during media acquisition');
       }
 
       localStreamRef.current = stream;
@@ -108,46 +157,40 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       return stream;
     } catch (error: any) {
       console.error('❌ WebRTC: Failed to get user media:', error);
-      setMediaError('Failed to access camera/microphone');
-      toastHelper.error('Failed to access camera/microphone');
+      setMediaError(error.message || 'Failed to access camera/microphone');
       throw error;
     }
-  }, [isVideoCall, setLocalStream]);
+  }, [isVideoCall, setLocalStream, isSessionValid]);
 
   const createPeerConnection = useCallback(() => {
+    if (!isSessionValid()) {
+      console.warn('⚠️ WebRTC: Cannot create peer connection - invalid session');
+      return null;
+    }
+
     if (peerConnectionRef.current) {
       console.log('♻️ WebRTC: Reusing existing peer connection');
       return peerConnectionRef.current;
     }
 
-    if (isCleanedUpRef.current) {
-      console.warn('⚠️ WebRTC: Cannot create peer connection - already cleaned up');
-      return null;
-    }
-
-    console.log('🔧 WebRTC: Creating NEW peer connection...');
-    console.log('🔧 WebRTC: ICE Servers:', JSON.stringify(ICE_SERVERS.iceServers?.map(s => {
-      if (typeof s === 'string') return s;
-      if ('username' in s) return { urls: s.urls, hasAuth: true };
-      return s.urls;
-    }), null, 2));
+    console.log('🔧 WebRTC: Creating NEW peer connection for callId:', callId);
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionRef.current = pc;
 
+    // ✅ All handlers check session validity
     pc.onicegatheringstatechange = () => {
+      if (!isSessionValid()) return;
       console.log('🔄 WebRTC: ICE gathering state:', pc.iceGatheringState);
     };
 
     pc.onicecandidate = (event) => {
-      if (isCleanedUpRef.current) return;
+      if (!isSessionValid()) return;
 
       if (event.candidate) {
         console.log('🧊 WebRTC: ICE Candidate:', {
           type: event.candidate.type,
           protocol: event.candidate.protocol,
-          address: event.candidate.address || 'hidden',
-          port: event.candidate.port,
         });
 
         socketClient.emit(SOCKET_EVENTS.WEBRTC_ICE, {
@@ -155,67 +198,63 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
           signal: event.candidate.toJSON(),
           to: otherUserId,
         });
-      } else {
-        console.log('🧊 WebRTC: ICE gathering complete');
       }
     };
 
     pc.oniceconnectionstatechange = () => {
+      if (!isSessionValid()) return;
+
       const state = pc.iceConnectionState;
       console.log('🔌 WebRTC: ICE connection state:', state);
 
-      if (isCleanedUpRef.current) return;
-
-      if (state === 'connected' || state === 'completed') {
-        setIsConnected(true);
-        console.log('✅ WebRTC: ICE Connected!');
-        toastHelper.success('Call connected!');
-      } else if (state === 'disconnected') {
-        setIsConnected(false);
-        console.warn('⚠️ WebRTC: ICE Disconnected - attempting reconnect...');
-        // Don't close connection yet, might reconnect
-      } else if (state === 'failed') {
-        setIsConnected(false);
-        console.error('❌ WebRTC: ICE Connection failed');
-        toastHelper.error('Connection failed - please try again');
-      } else if (state === 'checking') {
-        console.log('🔍 WebRTC: ICE Checking connectivity...');
+      switch (state) {
+        case 'connected':
+        case 'completed':
+          setIsConnected(true);
+          console.log('✅ WebRTC: ICE Connected!');
+          break;
+        case 'disconnected':
+          console.warn('⚠️ WebRTC: ICE Disconnected');
+          // Don't set isConnected false yet - might reconnect
+          break;
+        case 'failed':
+          setIsConnected(false);
+          console.error('❌ WebRTC: ICE Connection failed');
+          toastHelper.error('Connection failed');
+          break;
       }
     };
 
     pc.onconnectionstatechange = () => {
+      if (!isSessionValid()) return;
+
       const state = pc.connectionState;
       console.log('📡 WebRTC: Connection state:', state);
-
-      if (isCleanedUpRef.current) return;
-
       setConnectionState(state);
 
       if (state === 'connected') {
         setIsConnected(true);
-      } else if (state === 'failed') {
+      } else if (state === 'failed' || state === 'closed') {
         setIsConnected(false);
-        toastHelper.error('Connection failed');
       }
     };
 
     pc.ontrack = (event) => {
-      if (isCleanedUpRef.current) return;
+      if (!isSessionValid()) return;
 
       console.log('🎥 WebRTC: Remote track received:', event.track.kind);
-      if (event.streams && event.streams[0]) {
-        console.log('✅ WebRTC: Setting remote stream');
+      if (event.streams?.[0]) {
         setRemoteStream(event.streams[0]);
       }
     };
 
     console.log('✅ WebRTC: Peer connection created');
     return pc;
-  }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream]);
+  }, [callId, otherUserId, setIsConnected, setConnectionState, setRemoteStream, isSessionValid]);
 
   const addTracksToConnection = useCallback((pc: RTCPeerConnection, stream: MediaStream) => {
     if (hasAddedTracksRef.current) {
-      console.log('⚠️ WebRTC: Tracks already added, skipping...');
+      console.log('⚠️ WebRTC: Tracks already added');
       return;
     }
 
@@ -225,17 +264,16 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     });
 
     hasAddedTracksRef.current = true;
-    console.log('✅ WebRTC: All tracks added to peer connection');
   }, []);
 
   const createAndSendOffer = useCallback(async () => {
-    if (isCleanedUpRef.current) {
-      console.warn('⚠️ WebRTC: Cannot send offer - cleaned up');
+    if (!isSessionValid()) {
+      console.warn('⚠️ WebRTC: Cannot send offer - invalid session');
       return;
     }
 
     if (hasCreatedOfferRef.current) {
-      console.warn('⚠️ WebRTC: Offer already created, skipping...');
+      console.warn('⚠️ WebRTC: Offer already created');
       return;
     }
 
@@ -252,18 +290,17 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: isVideoCall,
-        iceRestart: false, // ✅ Set to true if want to force ICE restart
       });
 
-      if (isCleanedUpRef.current) {
-        console.warn('⚠️ WebRTC: Cleaned up during offer creation');
+      // ✅ Check session after async
+      if (!isSessionValid()) {
+        console.warn('⚠️ WebRTC: Session invalid after offer creation');
         return;
       }
 
       await pc.setLocalDescription(offer);
 
       console.log('📤 WebRTC: Sending offer to:', otherUserId);
-
       socketClient.emit(SOCKET_EVENTS.WEBRTC_OFFER, {
         callId,
         signal: offer,
@@ -274,36 +311,33 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     } catch (error) {
       hasCreatedOfferRef.current = false;
       console.error('❌ WebRTC: Failed to create offer:', error);
-      toastHelper.error('Failed to establish connection');
     }
-  }, [callId, otherUserId, isVideoCall]);
+  }, [callId, otherUserId, isVideoCall, isSessionValid]);
 
   const handleOffer = useCallback(async (data: WebRTCSignalData) => {
-    if (data.callId !== callId) return;
+    // ✅ Strict validation
+    if (data.callId !== callId || !isSessionValid()) {
+      console.log('⚠️ WebRTC: Ignoring offer - wrong callId or invalid session');
+      return;
+    }
     if (!('type' in data.signal) || data.signal.type !== 'offer') return;
-    if (isCleanedUpRef.current) return;
 
     console.log('📥 WebRTC: Received offer from caller');
 
     let pc = peerConnectionRef.current;
 
     if (!pc) {
-      console.log('🔧 WebRTC: Creating peer connection for incoming offer...');
-
       if (!localStreamRef.current) {
         try {
           await getUserMedia();
         } catch (error) {
-          console.error('❌ WebRTC: Failed to get media for answer:', error);
+          console.error('❌ WebRTC: Failed to get media for answer');
           return;
         }
       }
 
       pc = createPeerConnection();
-      if (!pc) {
-        console.error('❌ WebRTC: Failed to create peer connection');
-        return;
-      }
+      if (!pc) return;
     }
 
     if (localStreamRef.current && !hasAddedTracksRef.current) {
@@ -311,22 +345,18 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
 
     try {
-      console.log('📥 WebRTC: Setting remote description (offer)...');
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
+      // Process pending candidates
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
-        console.log('✅ WebRTC: Added pending ICE candidate');
       }
       pendingCandidatesRef.current = [];
 
-      if (isCleanedUpRef.current) return;
+      if (!isSessionValid()) return;
 
-      console.log('📤 WebRTC: Creating answer...');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
-      console.log('📤 WebRTC: Sending answer to:', otherUserId);
 
       socketClient.emit(SOCKET_EVENTS.WEBRTC_ANSWER, {
         callId,
@@ -338,66 +368,65 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     } catch (error) {
       console.error('❌ WebRTC: Failed to handle offer:', error);
     }
-  }, [callId, otherUserId, getUserMedia, createPeerConnection, addTracksToConnection]);
+  }, [callId, otherUserId, getUserMedia, createPeerConnection, addTracksToConnection, isSessionValid]);
 
   const handleAnswer = useCallback(async (data: WebRTCSignalData) => {
-    if (data.callId !== callId) return;
+    if (data.callId !== callId || !isSessionValid()) return;
     if (!('type' in data.signal) || data.signal.type !== 'answer') return;
-    if (isCleanedUpRef.current) return;
 
     const pc = peerConnectionRef.current;
-    if (!pc) {
-      console.error('❌ WebRTC: No peer connection for handling answer');
-      return;
-    }
+    if (!pc) return;
 
     try {
-      console.log('📥 WebRTC: Received answer from receiver');
-
+      console.log('📥 WebRTC: Received answer');
       await pc.setRemoteDescription(new RTCSessionDescription(data.signal as RTCSessionDescriptionInit));
 
       for (const candidate of pendingCandidatesRef.current) {
         await pc.addIceCandidate(candidate);
-        console.log('✅ WebRTC: Added pending ICE candidate');
       }
       pendingCandidatesRef.current = [];
 
-      console.log('✅ WebRTC: Answer applied, connection should establish...');
+      console.log('✅ WebRTC: Answer applied');
     } catch (error) {
       console.error('❌ WebRTC: Failed to handle answer:', error);
     }
-  }, [callId]);
+  }, [callId, isSessionValid]);
 
   const handleICE = useCallback(async (data: WebRTCSignalData) => {
-    if (data.callId !== callId) return;
+    if (data.callId !== callId || !isSessionValid()) return;
     if (!('candidate' in data.signal)) return;
-    if (isCleanedUpRef.current) return;
 
     const pc = peerConnectionRef.current;
 
     try {
       const candidate = new RTCIceCandidate(data.signal as RTCIceCandidateInit);
 
-      if (pc && pc.remoteDescription) {
+      if (pc?.remoteDescription) {
         await pc.addIceCandidate(candidate);
-        console.log('✅ WebRTC: ICE candidate added');
       } else {
         pendingCandidatesRef.current.push(candidate);
-        console.log('📦 WebRTC: ICE candidate queued (waiting for remote description)');
       }
     } catch (error) {
       console.error('❌ WebRTC: Failed to add ICE candidate:', error);
     }
-  }, [callId]);
+  }, [callId, isSessionValid]);
 
+  // ✅ INITIALIZE - Fresh start setiap call
   const initializeCall = useCallback(async () => {
-    if (isInitialized) {
-      console.warn('⚠️ WebRTC: Already initialized');
-      return;
+    // 1. Clean any previous state FIRST
+    if (callSessionRef.current && callSessionRef.current !== callId) {
+      console.log('🔄 WebRTC: Different call detected, cleaning previous...');
+      cleanup();
     }
 
-    if (isCleanedUpRef.current) {
-      console.warn('⚠️ WebRTC: Cannot initialize - already cleaned up');
+    // 2. Set new session
+    callSessionRef.current = callId;
+    hasCreatedOfferRef.current = false;
+    hasAddedTracksRef.current = false;
+    pendingCandidatesRef.current = [];
+
+    if (isInitialized && peerConnectionRef.current) {
+      console.warn('⚠️ WebRTC: Already initialized for this call');
       return;
     }
 
@@ -406,101 +435,69 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
 
       const stream = await getUserMedia();
 
-      const pc = createPeerConnection();
-      if (!pc) {
-        throw new Error('Failed to create peer connection');
+      if (!isSessionValid()) {
+        console.warn('⚠️ WebRTC: Session invalid after getUserMedia');
+        return;
       }
+
+      const pc = createPeerConnection();
+      if (!pc) throw new Error('Failed to create peer connection');
 
       addTracksToConnection(pc, stream);
-
       setIsInitialized(true);
-
-      if (isCaller) {
-        console.log('📞 WebRTC: Caller ready, waiting for receiver to answer...');
-      } else {
-        console.log('📞 WebRTC: Receiver ready, waiting for offer...');
-      }
 
       console.log('✅ WebRTC: Initialization complete');
     } catch (error) {
       console.error('❌ WebRTC: Failed to initialize:', error);
+      cleanup();
     }
-  }, [isInitialized, isCaller, isVideoCall, callId, getUserMedia, createPeerConnection, addTracksToConnection]);
+  }, [callId, isInitialized, isCaller, isVideoCall, getUserMedia, createPeerConnection, addTracksToConnection, cleanup, isSessionValid]);
 
+  // ✅ Caller sends offer when call is answered
   useEffect(() => {
-    if (isCaller && isInitialized && isCallAnswered && !hasCreatedOfferRef.current && !isCleanedUpRef.current) {
-      console.log('🎯 WebRTC: Call ANSWERED! Caller sending offer in 1 second...');
+    if (!isCaller || !isInitialized || !isCallAnswered || hasCreatedOfferRef.current) return;
+    if (!isSessionValid()) return;
 
-      const timeout = setTimeout(() => {
-        if (!isCleanedUpRef.current && !hasCreatedOfferRef.current) {
-          createAndSendOffer();
-        }
-      }, 1000);
+    console.log('🎯 WebRTC: Call ANSWERED! Sending offer in 500ms...');
 
-      return () => clearTimeout(timeout);
-    }
-  }, [isCaller, isInitialized, isCallAnswered, createAndSendOffer]);
-
-  // ✅ CONNECTION TIMEOUT - Auto fail after 30s if not connected
-  useEffect(() => {
-    if (!isInitialized || isCleanedUpRef.current) return;
-
-    const timeoutId = setTimeout(() => {
-      const pc = peerConnectionRef.current;
-      if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-        console.error('❌ WebRTC: Connection timeout (30s) - ICE state:', pc.iceConnectionState);
-        toastHelper.error('Connection timeout. Please try again.');
+    const timeout = setTimeout(() => {
+      if (isSessionValid() && !hasCreatedOfferRef.current) {
+        createAndSendOffer();
       }
-    }, 30000); // 30 seconds
+    }, 500);
 
-    return () => clearTimeout(timeoutId);
-  }, [isInitialized]);
+    return () => clearTimeout(timeout);
+  }, [isCaller, isInitialized, isCallAnswered, createAndSendOffer, isSessionValid]);
 
-  const cleanup = useCallback(() => {
-    console.log('🧹 WebRTC: Cleaning up...');
-
-    isCleanedUpRef.current = true;
-    hasCreatedOfferRef.current = false;
-    hasAddedTracksRef.current = false;
-
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
+  // ✅ Socket listeners - ONLY when callId is valid
+  useEffect(() => {
+    if (!callId) {
+      console.warn('⚠️ WebRTC: No callId - skipping socket setup');
+      return;
     }
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-
-    pendingCandidatesRef.current = [];
-    setIsInitialized(false);
-
-    console.log('✅ WebRTC: Cleanup complete');
-  }, []);
-
-  useEffect(() => {
-    isCleanedUpRef.current = false;
-    hasCreatedOfferRef.current = false;
-    hasAddedTracksRef.current = false;
-  }, [callId]);
-
-  useEffect(() => {
     console.log('👂 WebRTC: Setting up socket listeners for callId:', callId);
 
-    socketClient.on(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
-    socketClient.on(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
-    socketClient.on(SOCKET_EVENTS.WEBRTC_ICE, handleICE);
+    const onOffer = (data: WebRTCSignalData) => handleOffer(data);
+    const onAnswer = (data: WebRTCSignalData) => handleAnswer(data);
+    const onICE = (data: WebRTCSignalData) => handleICE(data);
+
+    socketClient.on(SOCKET_EVENTS.WEBRTC_OFFER, onOffer);
+    socketClient.on(SOCKET_EVENTS.WEBRTC_ANSWER, onAnswer);
+    socketClient.on(SOCKET_EVENTS.WEBRTC_ICE, onICE);
 
     return () => {
-      socketClient.off(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
-      socketClient.off(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
-      socketClient.off(SOCKET_EVENTS.WEBRTC_ICE, handleICE);
+      console.log('👂 WebRTC: Removing socket listeners for callId:', callId);
+      socketClient.off(SOCKET_EVENTS.WEBRTC_OFFER, onOffer);
+      socketClient.off(SOCKET_EVENTS.WEBRTC_ANSWER, onAnswer);
+      socketClient.off(SOCKET_EVENTS.WEBRTC_ICE, onICE);
     };
   }, [callId, handleOffer, handleAnswer, handleICE]);
 
+  // ✅ Cleanup on unmount
   useEffect(() => {
     return () => {
+      console.log('🔌 WebRTC: Component unmounting - cleanup');
       cleanup();
     };
   }, [cleanup]);

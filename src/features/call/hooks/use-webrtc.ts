@@ -172,11 +172,14 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         toastHelper.success('Call connected!');
       } else if (state === 'disconnected') {
         setIsConnected(false);
-        console.warn('⚠️ WebRTC: ICE Disconnected');
+        console.warn('⚠️ WebRTC: ICE Disconnected - attempting reconnect...');
+        // Don't close connection yet, might reconnect
       } else if (state === 'failed') {
         setIsConnected(false);
         console.error('❌ WebRTC: ICE Connection failed');
         toastHelper.error('Connection failed - please try again');
+      } else if (state === 'checking') {
+        console.log('🔍 WebRTC: ICE Checking connectivity...');
       }
     };
 
@@ -249,6 +252,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: isVideoCall,
+        iceRestart: false, // ✅ Set to true if want to force ICE restart
       });
 
       if (isCleanedUpRef.current) {
@@ -436,6 +440,21 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       return () => clearTimeout(timeout);
     }
   }, [isCaller, isInitialized, isCallAnswered, createAndSendOffer]);
+
+  // ✅ CONNECTION TIMEOUT - Auto fail after 30s if not connected
+  useEffect(() => {
+    if (!isInitialized || isCleanedUpRef.current) return;
+
+    const timeoutId = setTimeout(() => {
+      const pc = peerConnectionRef.current;
+      if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+        console.error('❌ WebRTC: Connection timeout (30s) - ICE state:', pc.iceConnectionState);
+        toastHelper.error('Connection timeout. Please try again.');
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearTimeout(timeoutId);
+  }, [isInitialized]);
 
   const cleanup = useCallback(() => {
     console.log('🧹 WebRTC: Cleaning up...');

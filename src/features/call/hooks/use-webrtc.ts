@@ -12,45 +12,40 @@ import { logger } from '@/shared/utils/logger';
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    // ===== STUN (Google - gratis) =====
+    // ===== STUN =====
+    { urls: 'stun:ss-turn2.xirsys.com' },
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
 
-    // ===== TURN (OpenRelay - gratis no signup) =====
+    // ===== XIRSYS TURN (credentials lo!) =====
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'turn:ss-turn2.xirsys.com:80?transport=udp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
     },
     {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'turn:ss-turn2.xirsys.com:3478?transport=udp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
     },
     {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-
-    // ===== TURN (Standard ports untuk nembus firewall) =====
-    {
-      urls: 'turn:relay.metered.ca:80',
-      username: 'e13b6bfce0d43c4b0de3b547',
-      credential: 'xB/lR4k+4KoKOcB2',
+      urls: 'turn:ss-turn2.xirsys.com:80?transport=tcp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
     },
     {
-      urls: 'turn:relay.metered.ca:443',
-      username: 'e13b6bfce0d43c4b0de3b547',
-      credential: 'xB/lR4k+4KoKOcB2',
+      urls: 'turn:ss-turn2.xirsys.com:3478?transport=tcp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
     },
     {
-      urls: 'turn:relay.metered.ca:443?transport=tcp',
-      username: 'e13b6bfce0d43c4b0de3b547',
-      credential: 'xB/lR4k+4KoKOcB2',
+      urls: 'turns:ss-turn2.xirsys.com:443?transport=tcp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
+    },
+    {
+      urls: 'turns:ss-turn2.xirsys.com:5349?transport=tcp',
+      username: '3OQPbC5JZUMRTNqbzo-cgYMj9kTDpA7B5FFatmexYJ2M1rcUlUjXc_vY7hiZa6JQAAAAAGk4yx9maWJpZHk=',
+      credential: '9192b39a-d566-11f0-8b03-0242ac140004',
     },
   ],
   iceCandidatePoolSize: 10,

@@ -64,7 +64,9 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
   const hasCreatedOfferRef = useRef(false);
   const hasAddedTracksRef = useRef(false);
   const isNegotiatingRef = useRef(false);
-  const isCleaningUpRef = useRef(false); // ✅ NEW: Track cleanup state
+  const isCleaningUpRef = useRef(false);
+  const isInitializingRef = useRef(false); // ✅ NEW: Track initialization state
+  const initPromiseRef = useRef<Promise<void> | null>(null); // ✅ NEW: Store init promise
 
   const [isInitialized, setIsInitialized] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -203,6 +205,9 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
+
+    // ✅ Reset tracks flag when creating new peer connection
+    hasAddedTracksRef.current = false;
 
     // Fetch ICE servers (always fresh for new connection)
     console.log('🔄 WebRTC: Fetching ICE servers...');
@@ -352,22 +357,40 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     console.log('📥 WebRTC: Received offer from:', data.from);
 
     try {
+      // ✅ FIX: Wait for initialization to complete if in progress
+      if (isInitializingRef.current && initPromiseRef.current) {
+        console.log('⏳ WebRTC: Waiting for initialization to complete before handling offer...');
+        await initPromiseRef.current;
+        console.log('✅ WebRTC: Initialization complete, continuing with offer...');
+      }
+
       isNegotiatingRef.current = true;
 
+      // ✅ Use existing stream if available and active
       let stream = localStreamRef.current;
       if (!stream || !stream.active) {
         console.log('📥 WebRTC: Getting media before answering...');
         stream = await getUserMedia();
       }
 
+      // ✅ Use existing peer connection if available and not closed
       let pc = peerConnectionRef.current;
+
       if (!pc || pc.connectionState === 'closed') {
+        console.log('📥 WebRTC: Creating new peer connection for answer...');
+        hasAddedTracksRef.current = false;
         pc = await createPeerConnection();
         if (!pc) throw new Error('Failed to create peer connection');
       }
 
-      if (!hasAddedTracksRef.current && stream) {
+      // ✅ Always check if THIS peer connection has tracks
+      const existingSenders = pc.getSenders().filter(s => s.track);
+      if (existingSenders.length === 0 && stream) {
+        console.log('📥 WebRTC: Adding tracks to peer connection...');
+        hasAddedTracksRef.current = false; // Reset to ensure tracks are added
         addTracksToConnection(pc, stream);
+      } else {
+        console.log('📥 WebRTC: Peer connection already has', existingSenders.length, 'tracks');
       }
 
       console.log('📥 WebRTC: Senders before answer:', pc.getSenders().map(s => s.track?.kind));
@@ -447,49 +470,65 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [callId, isSessionValid]);
 
-  // ✅ FIXED: INITIALIZE CALL - Now properly waits for cleanup
+  // ✅ FIXED: INITIALIZE CALL - Now properly waits for cleanup and tracks state
   const initializeCall = useCallback(async () => {
-    // ✅ FIX: ALWAYS cleanup before starting new call
-    if (peerConnectionRef.current || localStreamRef.current || callSessionRef.current) {
-      console.log('🧹 WebRTC: Cleaning up before new call...');
-      await cleanup();
-      // ✅ Extra wait to ensure browser releases resources
-      await new Promise(resolve => setTimeout(resolve, 300));
+    // If already initializing, return existing promise
+    if (isInitializingRef.current && initPromiseRef.current) {
+      console.log('⏳ WebRTC: Initialization in progress, waiting...');
+      return initPromiseRef.current;
     }
 
-    // Set new session
-    callSessionRef.current = callId;
-    hasCreatedOfferRef.current = false;
-    hasAddedTracksRef.current = false;
-    isNegotiatingRef.current = false;
-    pendingCandidatesRef.current = [];
+    const doInit = async () => {
+      isInitializingRef.current = true;
 
-    if (isInitialized && peerConnectionRef.current) {
-      console.warn('⚠️ WebRTC: Already initialized');
-      return;
-    }
+      try {
+        // ✅ FIX: ALWAYS cleanup before starting new call
+        if (peerConnectionRef.current || localStreamRef.current || callSessionRef.current) {
+          console.log('🧹 WebRTC: Cleaning up before new call...');
+          await cleanup();
+          // ✅ Extra wait to ensure browser releases resources
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
 
-    try {
-      console.log('🚀 WebRTC: Initializing...', { isCaller, isVideoCall, callId });
+        // Set new session
+        callSessionRef.current = callId;
+        hasCreatedOfferRef.current = false;
+        hasAddedTracksRef.current = false;
+        isNegotiatingRef.current = false;
+        pendingCandidatesRef.current = [];
 
-      // Step 1: Get media
-      const stream = await getUserMedia();
-      if (!isSessionValid()) return;
+        if (isInitialized && peerConnectionRef.current) {
+          console.warn('⚠️ WebRTC: Already initialized');
+          return;
+        }
 
-      // Step 2: Create peer connection
-      const pc = await createPeerConnection();
-      if (!pc) throw new Error('Failed to create peer connection');
+        console.log('🚀 WebRTC: Initializing...', { isCaller, isVideoCall, callId });
 
-      // Step 3: Add tracks immediately
-      addTracksToConnection(pc, stream);
+        // Step 1: Get media
+        const stream = await getUserMedia();
+        if (!isSessionValid()) return;
 
-      setIsInitialized(true);
-      console.log('✅ WebRTC: Initialization complete');
+        // Step 2: Create peer connection
+        const pc = await createPeerConnection();
+        if (!pc) throw new Error('Failed to create peer connection');
 
-    } catch (error) {
-      console.error('❌ WebRTC: Initialization failed:', error);
-      await cleanup();
-    }
+        // Step 3: Add tracks immediately
+        addTracksToConnection(pc, stream);
+
+        setIsInitialized(true);
+        console.log('✅ WebRTC: Initialization complete');
+
+      } catch (error) {
+        console.error('❌ WebRTC: Initialization failed:', error);
+        await cleanup();
+      } finally {
+        isInitializingRef.current = false;
+        initPromiseRef.current = null;
+      }
+    };
+
+    initPromiseRef.current = doInit();
+    return initPromiseRef.current;
   }, [callId, isInitialized, isCaller, isVideoCall, getUserMedia, createPeerConnection, addTracksToConnection, cleanup, isSessionValid]);
 
   // ✅ Caller sends offer when call is answered

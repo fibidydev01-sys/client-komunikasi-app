@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/components/active-call-modal.tsx
-// FIXED V4: Better video element handling
+// FIXED V5: Reset initialization when activeCall changes
 // ================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -12,8 +12,6 @@ import {
   VideoOff,
   AlertCircle,
   Loader2,
-  Volume2,
-  VolumeX
 } from 'lucide-react';
 import { Button } from '@/shared/components/ui/button';
 import { UserAvatar } from '@/shared/components/common/user-avatar';
@@ -54,8 +52,10 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
-  const webrtcCleanupRef = useRef<(() => void) | null>(null);
-  const hasInitializedRef = useRef(false);
+  const webrtcCleanupRef = useRef<(() => Promise<void>) | null>(null);
+
+  // ✅ Track which callId we initialized for
+  const initializedCallIdRef = useRef<string | null>(null);
 
   const isCaller = activeCall?.callerId === user?.id;
   const otherParticipant = isCaller ? activeCall?.receiver : activeCall?.caller;
@@ -68,47 +68,77 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     isVideoCall: isVideoCall || false,
   });
 
+  // Store cleanup function
   useEffect(() => {
     webrtcCleanupRef.current = cleanup;
   }, [cleanup]);
 
-  // Initialize WebRTC
+  // ✅ FIXED: Initialize WebRTC - check against callId, not just boolean
   useEffect(() => {
-    if (open && activeCall && !hasInitializedRef.current && !isInitialized) {
-      hasInitializedRef.current = true;
-      setIsInitializing(true);
+    const currentCallId = activeCall?.id;
 
-      logger.debug('Active Call Modal: Initializing WebRTC...', {
-        isCaller,
-        callId: activeCall.id,
-        status: activeCall.status,
-      });
-
-      initializeCall().finally(() => {
-        setIsInitializing(false);
-      });
+    // Skip if no call or modal not open
+    if (!open || !activeCall || !currentCallId) {
+      return;
     }
-  }, [open, activeCall, isInitialized, initializeCall, isCaller]);
 
+    // ✅ KEY FIX: Check if we already initialized THIS specific call
+    if (initializedCallIdRef.current === currentCallId) {
+      logger.debug('Active Call Modal: Already initialized for this call:', currentCallId);
+      return;
+    }
+
+    // ✅ If we have a different call initialized, cleanup first
+    if (initializedCallIdRef.current && initializedCallIdRef.current !== currentCallId) {
+      logger.debug('Active Call Modal: Different call detected, will reinitialize');
+      // Don't need to manually cleanup here - useWebRTC handles it
+    }
+
+    // Mark this call as being initialized
+    initializedCallIdRef.current = currentCallId;
+    setIsInitializing(true);
+
+    logger.debug('Active Call Modal: Initializing WebRTC...', {
+      isCaller,
+      callId: currentCallId,
+      status: activeCall.status,
+    });
+
+    initializeCall().finally(() => {
+      setIsInitializing(false);
+    });
+
+  }, [open, activeCall?.id, activeCall?.status, initializeCall, isCaller]);
+
+  // ✅ FIXED: Reset when modal closes OR when activeCall becomes null
   useEffect(() => {
-    if (!open) {
-      hasInitializedRef.current = false;
+    if (!open || !activeCall) {
+      logger.debug('Active Call Modal: Resetting state (open:', open, ', activeCall:', !!activeCall, ')');
+
+      initializedCallIdRef.current = null;
       setHasRemoteVideo(false);
-    }
-  }, [open]);
+      setAudioPlaying(false);
+      setCallDuration(0);
+      setIsInitializing(false);
 
-  // ✅ FIXED: Attach local stream to video element
+      // Reset call timer
+      if (callTimerRef.current) {
+        clearInterval(callTimerRef.current);
+        callTimerRef.current = null;
+      }
+      callStartTimeRef.current = null;
+    }
+  }, [open, activeCall]);
+
+  // Attach local stream to video element
   useEffect(() => {
     if (localStream && localVideoRef.current) {
       logger.debug('Active Call Modal: Attaching local stream to video element');
 
       const video = localVideoRef.current;
 
-      // Clear existing srcObject first
       if (video.srcObject !== localStream) {
         video.srcObject = localStream;
-
-        // Force play
         video.play().catch((err) => {
           logger.warn('Active Call Modal: Local video autoplay blocked:', err);
         });
@@ -121,7 +151,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [localStream]);
 
-  // ✅ FIXED: Attach remote stream to video AND audio elements
+  // Attach remote stream to video AND audio elements
   useEffect(() => {
     if (!remoteStream) {
       setHasRemoteVideo(false);
@@ -134,7 +164,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       active: remoteStream.active,
     });
 
-    // Check if remote stream has active video tracks
     const videoTracks = remoteStream.getVideoTracks();
     const hasActiveVideo = videoTracks.length > 0 && videoTracks.some(t => t.enabled && t.readyState === 'live');
     setHasRemoteVideo(hasActiveVideo);
@@ -153,7 +182,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
         logger.debug('Active Call Modal: Setting remote video srcObject');
         video.srcObject = remoteStream;
 
-        // Wait for loadedmetadata then play
         video.onloadedmetadata = () => {
           logger.debug('Active Call Modal: Remote video metadata loaded');
           video.play()
@@ -166,14 +194,13 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             });
         };
 
-        // Also try to play immediately
         video.play().catch(() => {
           // Will retry on loadedmetadata
         });
       }
     }
 
-    // Attach to audio element (for voice calls or as backup)
+    // Attach to audio element
     if (remoteAudioRef.current) {
       const audio = remoteAudioRef.current;
 
@@ -193,12 +220,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
 
     // Listen for track changes
-    const handleTrackEnabled = () => {
-      const hasVideo = remoteStream.getVideoTracks().some(t => t.enabled);
-      setHasRemoteVideo(hasVideo);
-      logger.debug('Active Call Modal: Track enabled changed, hasVideo:', hasVideo);
-    };
-
     remoteStream.getVideoTracks().forEach(track => {
       track.onended = () => {
         logger.warn('Active Call Modal: Remote video track ended');
@@ -269,6 +290,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     try {
       logger.debug('Active Call Modal: Ending call...');
 
+      // Stop timer
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current);
         callTimerRef.current = null;
@@ -278,17 +300,21 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
         ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
         : 0;
 
+      // Cleanup WebRTC
       if (webrtcCleanupRef.current) {
-        webrtcCleanupRef.current();
+        await webrtcCleanupRef.current();
       }
       cleanupStreams();
 
+      // End call via API
       await endCall(activeCall.id, duration);
 
+      // Reset local state
       callStartTimeRef.current = null;
-      hasInitializedRef.current = false;
+      initializedCallIdRef.current = null;
       setCallDuration(0);
       setHasRemoteVideo(false);
+      setAudioPlaying(false);
 
       logger.success('Active Call Modal: Call ended');
     } catch (error) {
@@ -296,6 +322,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [activeCall, isEnding, cleanupStreams, endCall]);
 
+  // Handle external call end
   useEffect(() => {
     if (open && !activeCall) {
       logger.debug('Active Call Modal: Call ended externally');
@@ -310,12 +337,14 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       }
 
       callStartTimeRef.current = null;
-      hasInitializedRef.current = false;
+      initializedCallIdRef.current = null;
       setCallDuration(0);
       setHasRemoteVideo(false);
+      setAudioPlaying(false);
     }
   }, [open, activeCall]);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (callTimerRef.current) {

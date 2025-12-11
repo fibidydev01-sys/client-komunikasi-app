@@ -9,29 +9,36 @@ import { useCallStore } from '../store/call.store';
 import { SOCKET_EVENTS } from '@/shared/constants/socket-events';
 import { toastHelper } from '@/shared/utils/toast-helper';
 
-// ✅ FRESH XIRSYS CREDENTIALS - Updated: December 10, 2025 (ss-turn1)
-const ICE_SERVERS: RTCConfiguration = {
+import { axiosClient } from '@/lib/axios-client';
+import { API_ENDPOINTS } from '@/shared/constants/api-endpoints';
+
+// ✅ FALLBACK ICE SERVERS (STUN only - used if API fails)
+const FALLBACK_ICE_SERVERS: RTCConfiguration = {
   iceServers: [
-    // 1. Xirsys STUN
-    { urls: ['stun:ss-turn1.xirsys.com'] },
-    // 2. Google STUN (backup)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    // 3. Xirsys TURN (FRESH!)
-    {
-      username: 'mHEZ8YnQZzu7nN_OBfrPdX1MrEqveUNye0pcBwgJkbzcY2dOJ1mDIT6h5SvMmltYAAAAAGk42UNmaWJpZHk=',
-      credential: 'ff1f37a0-d56e-11f0-b463-0242ac140004',
-      urls: [
-        'turn:ss-turn1.xirsys.com:80?transport=udp',
-        'turn:ss-turn1.xirsys.com:3478?transport=udp',
-        'turn:ss-turn1.xirsys.com:80?transport=tcp',
-        'turn:ss-turn1.xirsys.com:3478?transport=tcp',
-        'turns:ss-turn1.xirsys.com:443?transport=tcp',
-        'turns:ss-turn1.xirsys.com:5349?transport=tcp',
-      ]
-    }
   ],
   iceCandidatePoolSize: 10,
+};
+
+// ✅ Fetch fresh TURN credentials from backend
+const fetchIceServers = async (): Promise<RTCConfiguration> => {
+  try {
+    console.log('🔄 Fetching fresh TURN credentials...');
+
+    const response = await axiosClient.get(API_ENDPOINTS.TURN.CREDENTIALS);
+    const { iceServers, provider } = response.data.data;
+
+    console.log(`✅ Got ${iceServers.length} ICE servers from ${provider}`);
+
+    return {
+      iceServers,
+      iceCandidatePoolSize: 10,
+    };
+  } catch (error) {
+    console.error('❌ Failed to fetch TURN credentials, using fallback:', error);
+    return FALLBACK_ICE_SERVERS;
+  }
 };
 
 interface UseWebRTCProps {
@@ -109,6 +116,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     pendingCandidatesRef.current = [];
     hasCreatedOfferRef.current = false;
     hasAddedTracksRef.current = false;
+    iceConfigRef.current = null; // ✅ Clear ICE config for fresh fetch next call
 
     // 5. Reset all state
     setIsInitialized(false);
@@ -165,7 +173,10 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
     }
   }, [isVideoCall, setLocalStream, isSessionValid]);
 
-  const createPeerConnection = useCallback(() => {
+  // ✅ Store ICE config in ref (fetched once per call)
+  const iceConfigRef = useRef<RTCConfiguration | null>(null);
+
+  const createPeerConnection = useCallback(async () => {
     if (!isSessionValid()) {
       console.warn('⚠️ WebRTC: Cannot create peer connection - invalid session');
       return null;
@@ -176,9 +187,15 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
       return peerConnectionRef.current;
     }
 
-    console.log('🔧 WebRTC: Creating NEW peer connection for callId:', callId);
+    // ✅ Fetch fresh ICE servers if not already fetched
+    if (!iceConfigRef.current) {
+      iceConfigRef.current = await fetchIceServers();
+    }
 
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    console.log('🔧 WebRTC: Creating NEW peer connection for callId:', callId);
+    console.log('🔧 WebRTC: ICE Servers:', iceConfigRef.current.iceServers?.length);
+
+    const pc = new RTCPeerConnection(iceConfigRef.current);
     peerConnectionRef.current = pc;
 
     // ✅ All handlers check session validity
@@ -339,7 +356,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         }
       }
 
-      pc = createPeerConnection();
+      pc = await createPeerConnection();
       if (!pc) return;
     }
 
@@ -443,7 +460,7 @@ export const useWebRTC = ({ callId, otherUserId, isCaller, isVideoCall }: UseWeb
         return;
       }
 
-      const pc = createPeerConnection();
+      const pc = await createPeerConnection();
       if (!pc) throw new Error('Failed to create peer connection');
 
       addTracksToConnection(pc, stream);

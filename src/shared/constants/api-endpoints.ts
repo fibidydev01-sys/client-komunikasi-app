@@ -50,6 +50,10 @@ export const API_ENDPOINTS = {
     DELETE: (id: string) => `/calls/${id}`,
   },
 
+  TURN: {
+    CREDENTIALS: '/turn/credentials',
+  },
+
   // Status
   STATUS: {
     CREATE: '/status',

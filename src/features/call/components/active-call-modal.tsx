@@ -1,6 +1,6 @@
 // ================================================
 // FILE: src/features/call/components/active-call-modal.tsx
-// FIXED V3: Added audio element for voice calls
+// FIXED V4: Better video element handling
 // ================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -47,21 +47,20 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
   const [callDuration, setCallDuration] = useState(0);
   const [isInitializing, setIsInitializing] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement | null>(null); // ✅ Audio element for voice calls
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const webrtcCleanupRef = useRef<(() => void) | null>(null);
   const hasInitializedRef = useRef(false);
 
-  // Determine call details
   const isCaller = activeCall?.callerId === user?.id;
   const otherParticipant = isCaller ? activeCall?.receiver : activeCall?.caller;
   const isVideoCall = activeCall?.type === 'VIDEO';
 
-  // Initialize WebRTC hook
   const { initializeCall, cleanup, isInitialized, mediaError } = useWebRTC({
     callId: activeCall?.id || '',
     otherUserId: otherParticipant?.id || '',
@@ -69,12 +68,11 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     isVideoCall: isVideoCall || false,
   });
 
-  // Store cleanup reference
   useEffect(() => {
     webrtcCleanupRef.current = cleanup;
   }, [cleanup]);
 
-  // ✅ Initialize WebRTC when modal opens - BOTH caller and receiver
+  // Initialize WebRTC
   useEffect(() => {
     if (open && activeCall && !hasInitializedRef.current && !isInitialized) {
       hasInitializedRef.current = true;
@@ -92,54 +90,139 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [open, activeCall, isInitialized, initializeCall, isCaller]);
 
-  // Reset hasInitialized when modal closes
   useEffect(() => {
     if (!open) {
       hasInitializedRef.current = false;
+      setHasRemoteVideo(false);
     }
   }, [open]);
 
-  // Attach local stream to video element
+  // ✅ FIXED: Attach local stream to video element
   useEffect(() => {
     if (localStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = localStream;
-      logger.debug('Active Call Modal: Local stream attached');
+      logger.debug('Active Call Modal: Attaching local stream to video element');
+
+      const video = localVideoRef.current;
+
+      // Clear existing srcObject first
+      if (video.srcObject !== localStream) {
+        video.srcObject = localStream;
+
+        // Force play
+        video.play().catch((err) => {
+          logger.warn('Active Call Modal: Local video autoplay blocked:', err);
+        });
+      }
+
+      logger.debug('Active Call Modal: Local stream attached', {
+        videoTracks: localStream.getVideoTracks().length,
+        audioTracks: localStream.getAudioTracks().length,
+      });
     }
   }, [localStream]);
 
-  // ✅ CRITICAL: Attach remote stream to BOTH video AND audio elements
+  // ✅ FIXED: Attach remote stream to video AND audio elements
   useEffect(() => {
-    if (remoteStream) {
-      logger.debug('Active Call Modal: Remote stream received', {
-        audioTracks: remoteStream.getAudioTracks().length,
-        videoTracks: remoteStream.getVideoTracks().length,
-      });
+    if (!remoteStream) {
+      setHasRemoteVideo(false);
+      return;
+    }
 
-      // For video calls - attach to video element
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        logger.debug('Active Call Modal: Remote stream attached to video element');
+    logger.debug('Active Call Modal: Remote stream received', {
+      audioTracks: remoteStream.getAudioTracks().length,
+      videoTracks: remoteStream.getVideoTracks().length,
+      active: remoteStream.active,
+    });
+
+    // Check if remote stream has active video tracks
+    const videoTracks = remoteStream.getVideoTracks();
+    const hasActiveVideo = videoTracks.length > 0 && videoTracks.some(t => t.enabled && t.readyState === 'live');
+    setHasRemoteVideo(hasActiveVideo);
+
+    logger.debug('Active Call Modal: Video tracks status', {
+      count: videoTracks.length,
+      hasActiveVideo,
+      tracks: videoTracks.map(t => ({ enabled: t.enabled, readyState: t.readyState, muted: t.muted })),
+    });
+
+    // Attach to video element
+    if (remoteVideoRef.current) {
+      const video = remoteVideoRef.current;
+
+      if (video.srcObject !== remoteStream) {
+        logger.debug('Active Call Modal: Setting remote video srcObject');
+        video.srcObject = remoteStream;
+
+        // Wait for loadedmetadata then play
+        video.onloadedmetadata = () => {
+          logger.debug('Active Call Modal: Remote video metadata loaded');
+          video.play()
+            .then(() => {
+              logger.success('Active Call Modal: ✅ Remote video playing!');
+              setHasRemoteVideo(true);
+            })
+            .catch((err) => {
+              logger.error('Active Call Modal: ❌ Remote video play failed:', err);
+            });
+        };
+
+        // Also try to play immediately
+        video.play().catch(() => {
+          // Will retry on loadedmetadata
+        });
       }
+    }
 
-      // ✅ For ALL calls (including voice) - attach to audio element
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
+    // Attach to audio element (for voice calls or as backup)
+    if (remoteAudioRef.current) {
+      const audio = remoteAudioRef.current;
 
-        // Force play audio
-        remoteAudioRef.current.play()
+      if (audio.srcObject !== remoteStream) {
+        audio.srcObject = remoteStream;
+
+        audio.play()
           .then(() => {
             setAudioPlaying(true);
             logger.success('Active Call Modal: ✅ Remote audio playing!');
           })
           .catch((err) => {
-            logger.error('Active Call Modal: ❌ Failed to play remote audio:', err);
+            logger.error('Active Call Modal: ❌ Remote audio play failed:', err);
             setAudioPlaying(false);
           });
       }
     }
+
+    // Listen for track changes
+    const handleTrackEnabled = () => {
+      const hasVideo = remoteStream.getVideoTracks().some(t => t.enabled);
+      setHasRemoteVideo(hasVideo);
+      logger.debug('Active Call Modal: Track enabled changed, hasVideo:', hasVideo);
+    };
+
+    remoteStream.getVideoTracks().forEach(track => {
+      track.onended = () => {
+        logger.warn('Active Call Modal: Remote video track ended');
+        setHasRemoteVideo(false);
+      };
+      track.onmute = () => {
+        logger.warn('Active Call Modal: Remote video track muted');
+      };
+      track.onunmute = () => {
+        logger.debug('Active Call Modal: Remote video track unmuted');
+        setHasRemoteVideo(true);
+      };
+    });
+
+    return () => {
+      remoteStream.getVideoTracks().forEach(track => {
+        track.onended = null;
+        track.onmute = null;
+        track.onunmute = null;
+      });
+    };
   }, [remoteStream]);
 
-  // Call duration timer - start when connected
+  // Call duration timer
   useEffect(() => {
     if (isConnected && !callStartTimeRef.current) {
       callStartTimeRef.current = Date.now();
@@ -161,71 +244,51 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     };
   }, [isConnected]);
 
-  // Format duration
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Get connection status text
   const getConnectionStatus = () => {
-    if (isInitializing) {
-      return '📡 Initializing...';
-    }
-
-    if (isConnected) {
-      return formatDuration(callDuration);
-    }
+    if (isInitializing) return '📡 Initializing...';
+    if (isConnected) return formatDuration(callDuration);
 
     switch (connectionState) {
-      case 'connecting':
-        return '📞 Connecting...';
-      case 'new':
-        return '📞 Starting call...';
-      case 'failed':
-        return '❌ Connection failed';
-      case 'disconnected':
-        return '⚠️ Reconnecting...';
-      default:
-        return isCaller ? '📞 Calling...' : '📞 Connecting...';
+      case 'connecting': return '📞 Connecting...';
+      case 'new': return '📞 Starting call...';
+      case 'failed': return '❌ Connection failed';
+      case 'disconnected': return '⚠️ Reconnecting...';
+      default: return isCaller ? '📞 Calling...' : '📞 Connecting...';
     }
   };
 
-  // Handle end call
   const handleEndCall = useCallback(async () => {
-    if (!activeCall || isEnding) {
-      logger.warn('Active Call Modal: Cannot end call - no call or already ending');
-      return;
-    }
+    if (!activeCall || isEnding) return;
 
     try {
       logger.debug('Active Call Modal: Ending call...');
 
-      // Stop timer
       if (callTimerRef.current) {
         clearInterval(callTimerRef.current);
         callTimerRef.current = null;
       }
 
-      // Calculate duration
       const duration = callStartTimeRef.current
         ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
         : 0;
 
-      // Cleanup WebRTC
       if (webrtcCleanupRef.current) {
         webrtcCleanupRef.current();
       }
       cleanupStreams();
 
-      // End call on server
       await endCall(activeCall.id, duration);
 
-      // Reset refs
       callStartTimeRef.current = null;
       hasInitializedRef.current = false;
       setCallDuration(0);
+      setHasRemoteVideo(false);
 
       logger.success('Active Call Modal: Call ended');
     } catch (error) {
@@ -233,7 +296,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
     }
   }, [activeCall, isEnding, cleanupStreams, endCall]);
 
-  // Handle external call end
   useEffect(() => {
     if (open && !activeCall) {
       logger.debug('Active Call Modal: Call ended externally');
@@ -250,10 +312,10 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       callStartTimeRef.current = null;
       hasInitializedRef.current = false;
       setCallDuration(0);
+      setHasRemoteVideo(false);
     }
   }, [open, activeCall]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (callTimerRef.current) {
@@ -266,7 +328,7 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
-      {/* ✅ CRITICAL: Hidden audio element for remote audio playback */}
+      {/* Hidden audio element for remote audio */}
       <audio
         ref={remoteAudioRef}
         autoPlay
@@ -284,17 +346,12 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
             {getConnectionStatus()}
           </p>
 
-          {/* Audio status indicator */}
-          {isConnected && !isVideoCall && (
-            <div className="mt-2 flex items-center gap-2">
-              {audioPlaying ? (
-                <Volume2 className="h-4 w-4 text-green-400" />
-              ) : (
-                <VolumeX className="h-4 w-4 text-yellow-400" />
-              )}
-              <span className="text-xs text-gray-400">
-                {audioPlaying ? 'Audio active' : 'Waiting for audio...'}
-              </span>
+          {/* Debug info */}
+          {isConnected && (
+            <div className="mt-2 flex items-center gap-4 text-xs text-gray-400">
+              <span>Audio: {audioPlaying ? '✅' : '❌'}</span>
+              <span>Video: {hasRemoteVideo ? '✅' : '❌'}</span>
+              <span>Connected: {isConnected ? '✅' : '❌'}</span>
             </div>
           )}
 
@@ -317,7 +374,30 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
               autoPlay
               playsInline
               className="w-full h-full object-cover bg-gray-800"
+              style={{ display: hasRemoteVideo ? 'block' : 'none' }}
             />
+
+            {/* Placeholder when no remote video */}
+            {!hasRemoteVideo && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-800">
+                <div className="text-center">
+                  <UserAvatar
+                    src={otherParticipant?.avatar}
+                    name={otherParticipant?.name || 'Unknown'}
+                    size="xl"
+                    className="mx-auto mb-4 w-32 h-32"
+                  />
+                  <p className="text-white text-lg">
+                    {isConnected ? 'Camera off or loading...' : 'Waiting for video...'}
+                  </p>
+                  {!isConnected && (
+                    <div className="mt-4 flex justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-white" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Local Video (PIP) */}
             <div className="absolute bottom-24 right-4 w-32 h-48 md:w-48 md:h-64 rounded-lg overflow-hidden shadow-lg border-2 border-white/20 bg-gray-700">
@@ -336,28 +416,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
                 </div>
               )}
             </div>
-
-            {/* Waiting for remote video */}
-            {!remoteStream && (
-              <div className="absolute inset-0 flex items-center justify-center bg-gray-800">
-                <div className="text-center">
-                  <UserAvatar
-                    src={otherParticipant?.avatar}
-                    name={otherParticipant?.name || 'Unknown'}
-                    size="xl"
-                    className="mx-auto mb-4 w-32 h-32"
-                  />
-                  <p className="text-white text-lg">
-                    {isConnected ? 'Camera off' : 'Waiting for video...'}
-                  </p>
-                  {!isConnected && (
-                    <div className="mt-4 flex justify-center">
-                      <Loader2 className="h-6 w-6 animate-spin text-white" />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </>
         ) : (
           /* Voice Call UI */
@@ -371,16 +429,16 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
                   className="w-40 h-40 mx-auto"
                 />
 
-                {/* Audio wave indicator when connected */}
                 {isConnected && audioPlaying && (
                   <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2">
                     <div className="flex gap-1 items-end">
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '8px', animationDelay: '0ms' }} />
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '16px', animationDelay: '100ms' }} />
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '12px', animationDelay: '200ms' }} />
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '20px', animationDelay: '300ms' }} />
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '14px', animationDelay: '400ms' }} />
-                      <div className="w-1 bg-green-500 rounded-full animate-pulse" style={{ height: '10px', animationDelay: '500ms' }} />
+                      {[8, 16, 12, 20, 14, 10].map((h, i) => (
+                        <div
+                          key={i}
+                          className="w-1 bg-green-500 rounded-full animate-pulse"
+                          style={{ height: `${h}px`, animationDelay: `${i * 100}ms` }}
+                        />
+                      ))}
                     </div>
                   </div>
                 )}
@@ -394,24 +452,6 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
                 {isConnected ? '🎤 Voice Call Connected' : '🎤 Voice Call'}
               </p>
 
-              {/* Status indicators */}
-              <div className="mt-4 flex justify-center gap-4">
-                {isMuted && (
-                  <div className="flex items-center gap-1 px-2 py-1 bg-red-500/20 rounded-full">
-                    <MicOff className="h-3 w-3 text-red-400" />
-                    <span className="text-xs text-red-400">Muted</span>
-                  </div>
-                )}
-
-                {isConnected && !audioPlaying && (
-                  <div className="flex items-center gap-1 px-2 py-1 bg-yellow-500/20 rounded-full">
-                    <VolumeX className="h-3 w-3 text-yellow-400" />
-                    <span className="text-xs text-yellow-400">No audio</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Loading indicator */}
               {!isConnected && (
                 <div className="mt-6 flex justify-center">
                   <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
@@ -425,19 +465,16 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
       {/* Call Controls */}
       <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/80 to-transparent">
         <div className="flex items-center justify-center gap-6">
-          {/* Mute */}
           <Button
             size="lg"
             variant={isMuted ? 'destructive' : 'secondary'}
             onClick={toggleMute}
             disabled={isEnding}
             className="h-16 w-16 rounded-full"
-            title={isMuted ? 'Unmute' : 'Mute'}
           >
             {isMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
           </Button>
 
-          {/* Video (only for video calls) */}
           {isVideoCall && (
             <Button
               size="lg"
@@ -445,45 +482,29 @@ export const ActiveCallModal = ({ open, onClose }: ActiveCallModalProps) => {
               onClick={toggleVideo}
               disabled={isEnding}
               className="h-16 w-16 rounded-full"
-              title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
             >
               {isVideoEnabled ? <Video className="h-7 w-7" /> : <VideoOff className="h-7 w-7" />}
             </Button>
           )}
 
-          {/* End Call */}
           <Button
             size="lg"
             variant="destructive"
             onClick={handleEndCall}
             disabled={isEnding}
             className="h-16 w-16 rounded-full bg-red-600 hover:bg-red-700"
-            title="End call"
           >
-            {isEnding ? (
-              <Loader2 className="h-7 w-7 animate-spin" />
-            ) : (
-              <PhoneOff className="h-7 w-7" />
-            )}
+            {isEnding ? <Loader2 className="h-7 w-7 animate-spin" /> : <PhoneOff className="h-7 w-7" />}
           </Button>
         </div>
 
-        {/* Connection status */}
         <div className="mt-4 flex justify-center">
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${isConnected
-              ? 'bg-green-500/20 text-green-400'
-              : 'bg-yellow-500/20 text-yellow-400'
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
             }`}>
-            <div className={`w-2 h-2 rounded-full ${isConnected
-                ? 'bg-green-500'
-                : 'bg-yellow-500 animate-pulse'
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'
               }`} />
             <span className="text-sm">
-              {isEnding
-                ? 'Ending...'
-                : isConnected
-                  ? 'Connected'
-                  : 'Connecting...'}
+              {isEnding ? 'Ending...' : isConnected ? 'Connected' : 'Connecting...'}
             </span>
           </div>
         </div>
